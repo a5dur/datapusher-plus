@@ -586,12 +586,27 @@ jobs:
           # Initialize results tracking
           echo "file_name,file_url,upload_status,resource_id,datapusher_status,datastore_active,rows_imported,processing_time,error_message" > /tmp/test_results.csv
           
-          # Define test files array (URL and description pairs)
-          declare -A test_files
-          test_files["small_valid.csv"]="https://raw.githubusercontent.com/a5dur/datapusher-plus/refs/heads/main/tests/static/small_valid.csv|Small CSV with basic employee data"
-          test_files["medium_mixed_types.csv"]="https://raw.githubusercontent.com/a5dur/datapusher-plus/refs/heads/main/tests/static/medium_mixed_types.csv|Medium CSV with mixed data types"
-          test_files["unicode_special.csv"]="https://raw.githubusercontent.com/a5dur/datapusher-plus/refs/heads/main/tests/static/unicode_special.csv|CSV with Unicode and special characters"
-   
+          # Define test files (POSIX shell compatible)
+          test_files="small_valid.csv medium_mixed_types.csv unicode_special.csv"
+          
+          # Function to get URL and description for each file
+          get_file_info() {
+            case "$1" in
+              "small_valid.csv")
+                echo "https://raw.githubusercontent.com/a5dur/datapusher-plus/refs/heads/main/tests/static/small_valid.csv|Small CSV with basic employee data"
+                ;;
+              "medium_mixed_types.csv")
+                echo "https://raw.githubusercontent.com/a5dur/datapusher-plus/refs/heads/main/tests/static/medium_mixed_types.csv|Medium CSV with mixed data types"
+                ;;
+              "unicode_special.csv")
+                echo "https://raw.githubusercontent.com/a5dur/datapusher-plus/refs/heads/main/tests/static/unicode_special.csv|CSV with Unicode and special characters"
+                ;;
+              *)
+                echo "unknown|Unknown file"
+                ;;
+            esac
+          }
+      
           # Create test dataset once
           echo "Creating test dataset for DataPusher Plus..."
           if ckanapi action package_create \
@@ -610,9 +625,10 @@ jobs:
           failed_files=0
           
           # Test each file
-          for file_name in "${!test_files[@]}"; do
+          for file_name in $test_files; do
             total_files=$((total_files + 1))
-            IFS='|' read -r file_url description <<< "${test_files[$file_name]}"
+            file_info=$(get_file_info "$file_name")
+            IFS='|' read -r file_url description <<< "$file_info"
             
             echo ""
             echo "============================================="
