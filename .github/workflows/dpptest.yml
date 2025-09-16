@@ -1533,7 +1533,134 @@ jobs:
             /tmp/test_results.csv
             /tmp/ckan_stdout.log
             /tmp/ckan_worker.log
-          retention-days: 30
+          retention-days: 3
+
+      - name: Generate Test Results Summary
+        if: always()
+        run: |
+          set -eu
+          echo "=== Generating Markdown Summary ==="
+          
+          # Check if results file exists
+          if [ ! -f /tmp/test_results.csv ]; then
+            echo "No test results file found"
+            exit 0
+          fi
+          
+          # Count total results
+          total_lines=$(wc -l < /tmp/test_results.csv)
+          total_tests=$((total_lines - 1))  # Subtract header line
+          
+          if [ $total_tests -le 0 ]; then
+            echo "No test results to summarize"
+            exit 0
+          fi
+          
+          # Count results by status
+          passed=$(grep -c ",SUCCESS,.*,complete,true," /tmp/test_results.csv || echo "0")
+          failed=$(grep -c ",FAILED," /tmp/test_results.csv || echo "0")
+          error_count=$(grep -c ",error," /tmp/test_results.csv || echo "0")
+          
+          # Calculate success rate
+          if [ $total_tests -gt 0 ]; then
+            success_rate=$(( passed * 100 / total_tests ))
+          else
+            success_rate=0
+          fi
+          
+          # Start building the summary
+          {
+            echo "# DataPusher Plus Test Results"
+            echo ""
+            echo "## Summary"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| Total Tests | $total_tests |"
+            echo "| Passed | $passed |"
+            echo "| Failed | $failed |"
+            echo "| Errors | $error_count |"
+            echo "| Success Rate | ${success_rate}% |"
+            echo ""
+            echo "## Detailed Results"
+            echo ""
+            echo "| File Name | Upload Status | DataPusher Status | DataStore Active | Rows Imported | Processing Time (s) | Error Message |"
+            echo "|-----------|---------------|-------------------|------------------|---------------|---------------------|---------------|"
+            
+            # Process CSV and create table rows (skip header, exclude resource_id column)
+            tail -n +2 /tmp/test_results.csv | while IFS=',' read -r file_name upload_status resource_id datapusher_status datastore_active rows_imported processing_time error_message; do
+              # Clean up error message (remove quotes and truncate if too long)
+              clean_error=$(echo "$error_message" | sed 's/^"//;s/"$//' | cut -c1-50)
+              if [ ${#error_message} -gt 52 ]; then
+                clean_error="${clean_error}..."
+              fi
+              
+              # Add status icons
+              case "$upload_status" in
+                "SUCCESS") upload_icon="✅" ;;
+                *) upload_icon="❌" ;;
+              esac
+              
+              case "$datapusher_status" in
+                "complete") dp_icon="✅" ;;
+                "error") dp_icon="❌" ;;
+                *) dp_icon="⏳" ;;
+              esac
+              
+              case "$datastore_active" in
+                "true") ds_icon="✅" ;;
+                *) ds_icon="❌" ;;
+              esac
+              
+              echo "| $file_name | $upload_icon $upload_status | $dp_icon $datapusher_status | $ds_icon $datastore_active | $rows_imported | $processing_time | $clean_error |"
+            done
+            
+            echo ""
+            echo "## Status Legend"
+            echo ""
+            echo "- ✅ Success/True/Complete"
+            echo "- ❌ Failed/False/Error" 
+            echo "- ⏳ Pending/Unknown"
+            echo ""
+            
+            # Add recommendations based on results
+            if [ $passed -eq $total_tests ]; then
+              echo "## Result: All Tests Passed! 🎉"
+              echo ""
+              echo "DataPusher Plus is working correctly with all test files."
+            elif [ $passed -gt 0 ]; then
+              echo "## Result: Partial Success ⚠️"
+              echo ""
+              echo "DataPusher Plus works with some files but has issues with others."
+              echo ""
+              echo "### Files with Issues:"
+              # Show failed files
+              tail -n +2 /tmp/test_results.csv | while IFS=',' read -r file_name upload_status resource_id datapusher_status datastore_active rows_imported processing_time error_message; do
+                if [ "$upload_status" != "SUCCESS" ] || [ "$datapusher_status" != "complete" ] || [ "$datastore_active" != "true" ]; then
+                  clean_error=$(echo "$error_message" | sed 's/^"//;s/"$//')
+                  echo "- **$file_name**: $clean_error"
+                fi
+              done
+            else
+              echo "## Result: All Tests Failed ❌"
+              echo ""
+              echo "DataPusher Plus is not working correctly. Check the logs for details."
+            fi
+            
+            echo ""
+            echo "---"
+            echo "_Generated on $(date)_"
+            
+          } > /tmp/markdown_summary.md
+          
+          # Write to GitHub Actions step summary
+          cat /tmp/markdown_summary.md >> $GITHUB_STEP_SUMMARY
+          
+          echo "Markdown summary generated and added to workflow summary"
+          echo ""
+          echo "Preview of generated summary:"
+          echo "=================================="
+          cat /tmp/markdown_summary.md      
           
       - name: Cleanup
         if: always()
