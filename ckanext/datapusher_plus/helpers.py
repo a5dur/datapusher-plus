@@ -342,7 +342,7 @@ def mark_job_as_completed(job_id: str, data: Optional[Any] = None) -> None:
     update_dict = {
         "status": "complete",
         "data": json.dumps(data),
-        "finished_timestamp": datetime.datetime.now(),
+        "finished_timestamp": datetime.datetime.now(datetime.timezone.utc),
     }
     update_job(job_id, update_dict)
 
@@ -361,7 +361,7 @@ def mark_job_as_errored(job_id: str, error_object: Union[str, Dict[str, str]]) -
     update_dict = {
         "status": "error",
         "error": error_object,
-        "finished_timestamp": datetime.datetime.now(),
+        "finished_timestamp": datetime.datetime.now(datetime.timezone.utc),
     }
     update_job(job_id, update_dict)
 
