@@ -51,8 +51,12 @@ class FormulaStage(BaseStage):
             import ckan.plugins.toolkit as tk
 
             # Get the list of enabled plugins from config
+            # CKAN 2.11+ returns ckan.plugins as a list, older versions return a string
             plugins_config = tk.config.get('ckan.plugins', '')
-            enabled_plugins = [p.strip() for p in plugins_config.split()]
+            if isinstance(plugins_config, list):
+                enabled_plugins = plugins_config
+            else:
+                enabled_plugins = [p.strip() for p in plugins_config.split()]
 
             # Check for scheming-related plugins
             scheming_plugins = ['scheming_datasets', 'scheming_groups',
