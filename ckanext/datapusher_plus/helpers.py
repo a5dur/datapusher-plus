@@ -14,6 +14,7 @@ from typing import Any, Optional, Union, Dict, List, Tuple
 import ckan.plugins.toolkit as toolkit
 
 from ckanext.datapusher_plus.model import Jobs, Metadata, Logs
+from ckanext.datapusher_plus.utils import utcnow_naive
 import ckanext.datapusher_plus.job_exceptions as jex
 import ckanext.datapusher_plus.config as conf
 
@@ -342,7 +343,10 @@ def mark_job_as_completed(job_id: str, data: Optional[Any] = None) -> None:
     update_dict = {
         "status": "complete",
         "data": json.dumps(data),
-        "finished_timestamp": datetime.datetime.now(),
+        # Issue #145: persist as naive UTC so the job-status UI shows
+        # a portable timestamp instead of whatever local tz the worker
+        # happens to be running in.
+        "finished_timestamp": utcnow_naive(),
     }
     update_job(job_id, update_dict)
 
@@ -361,7 +365,8 @@ def mark_job_as_errored(job_id: str, error_object: Union[str, Dict[str, str]]) -
     update_dict = {
         "status": "error",
         "error": error_object,
-        "finished_timestamp": datetime.datetime.now(),
+        # Issue #145: see ``mark_job_as_completed`` — UTC, not local.
+        "finished_timestamp": utcnow_naive(),
     }
     update_job(job_id, update_dict)
 
@@ -398,6 +403,21 @@ def delete_api_key(job_id: str) -> None:
 def set_aps_job_id(job_id: str, aps_job_id: str) -> None:
 
     update_job(job_id, {"aps_job_id": aps_job_id})
+
+
+def _csv_safe_cell(value):
+    """Defang values that spreadsheet apps would interpret as formulas.
+
+    A ZIP entry's filename is attacker-controlled — if it starts with ``=``,
+    ``+``, ``-``, ``@``, ``\\t`` or ``\\r``, Excel/LibreOffice will interpret
+    the cell as a formula on open. Prefixing with a single quote tells the
+    spreadsheet to treat the cell as literal text.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 
 def extract_zip_or_metadata(
@@ -495,7 +515,10 @@ def extract_zip_or_metadata(
                     )
                     writer.writerow(
                         {
-                            "filename": file_info.filename,
+                            # Defang CSV-formula injection — ZIP entry filenames
+                            # are attacker-controlled and flow into a CSV that
+                            # may be opened in Excel/LibreOffice downstream.
+                            "filename": _csv_safe_cell(file_info.filename),
                             "compressed_size": file_info.compress_size,
                             "file_size": file_info.file_size,
                             "compression_ratio": f"{compression_ratio:.2f}%",
@@ -564,6 +587,141 @@ def scheming_get_suggestion_value(field_name, data=None, errors=None, lang=None)
         # Log the error but don't crash
         logger.warning(f"Error getting suggestion value: {e}")
         return ''
+
+
+
+def scheming_get_ai_suggestion_value(field_name, data=None, errors=None, lang=None):
+    """
+    Return the AI-derived suggestion value for ``field_name``, or ``""``.
+
+    Output shape on a populated package::
+
+        package["dpp_suggestions"]["ai_suggestions"] = {
+            "description": {"value": "...", "source": "qsv describegpt"},
+            "tags":        {"value": "...", "source": "qsv describegpt"},
+            "<field>":     {"value": "...", "source": "qsv describegpt"},
+            "STATUS":      "DONE",
+            "generated_at": "<ISO 8601>",
+        }
+
+    Per-field schema is uniform — top-level dataset metadata
+    (``description`` / ``tags``) and per-column metadata
+    (extracted from qsv describegpt's ``dictionary`` output) all live
+    under their own ``{value, source}`` entry. ``AISuggestionsStage``
+    reshapes qsv's verbatim output into this shape on the way in.
+
+    Parallel to ``scheming_get_suggestion_value`` (which reads from the
+    formula-derived ``dpp_suggestions["package"]`` sub-key). The two
+    namespaces co-exist on purpose: a formula-driven suggestion is
+    typically deterministic per-resource (and may be the operator's
+    "authoritative" suggestion), while an AI-derived one is
+    probabilistic and operator-reviewed. Keeping them in separate
+    sub-keys lets a single field surface either or both without
+    collision.
+
+    Defensive: any exception is logged and ``""`` is returned so a
+    malformed suggestion never breaks form rendering.
+    """
+    if not data:
+        return ''
+
+    try:
+        entry = _ai_suggestion_entry(data, field_name)
+        if entry is None:
+            return ''
+        if isinstance(entry, dict):
+            return entry.get('value', '') or ''
+        # Legacy / scalar entries (string) fall through as-is.
+        return str(entry)
+    except Exception as e:
+        logger.warning(f"Error getting AI suggestion value: {e}")
+        return ''
+
+
+
+def _ai_suggestion_entry(data, field_name):
+    """Internal — pull a per-field entry out of dpp_suggestions.ai_suggestions.
+
+    Returns the entry (typically a dict ``{value, source}``) or
+    ``None`` when ai_suggestions isn't populated / the field has no
+    matching entry. Shared by ``scheming_get_ai_suggestion_value`` and
+    ``scheming_get_ai_suggestion_source`` so both helpers see the same
+    extraction rules.
+
+    ``dpp_suggestions`` may arrive as a JSON string (CKAN re-serializes
+    extras on some round-trips); decode if so.
+    """
+    if not data:
+        return None
+    dpp = data.get('dpp_suggestions')
+    if isinstance(dpp, str):
+        try:
+            dpp = json.loads(dpp)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(dpp, dict):
+        return None
+    ai = dpp.get('ai_suggestions')
+    if not isinstance(ai, dict):
+        return None
+    return ai.get(field_name)
+
+
+def scheming_get_ai_suggestion_source(field_name, data=None):
+    """
+    Return the source label for an AI suggestion (e.g. ``"qsv describegpt"``),
+    or ``""`` when none is available.
+
+    The JS surfaces the source under the popover so reviewers know
+    where the suggested value came from. Defensive — never raises,
+    returns ``""`` on any error.
+    """
+    if not data:
+        return ''
+    try:
+        entry = _ai_suggestion_entry(data, field_name)
+        if isinstance(entry, dict):
+            return entry.get('source', '') or ''
+        return ''
+    except Exception as e:
+        logger.warning(f"Error getting AI suggestion source: {e}")
+        return ''
+
+
+def scheming_field_supports_ai_suggestion(field):
+    """
+    Check whether a scheming field config has opted into AI suggestions.
+
+    Opt-in convention: the field's scheming YAML carries
+    ``ai_suggestion: true``. Mirrors PR #253's helper of the same
+    name — the templates gate the per-field "AI Suggestion" button on
+    this.
+    """
+    if not isinstance(field, dict):
+        return False
+    return bool(field.get('ai_suggestion', False))
+
+
+def scheming_has_ai_suggestion_fields(schema):
+    """
+    Schema-level "does any field opt into AI suggestions?" check.
+
+    Used by ``ai_suggestions_button.html`` to decide whether to render
+    the dataset-level "Get AI Suggestions" button at all — when no
+    field opts in, the button is hidden entirely. Walks both
+    ``dataset_fields`` and ``resource_fields`` (qsv describegpt can
+    produce per-resource as well as per-dataset metadata).
+    """
+    if not isinstance(schema, dict):
+        return False
+    for key in ('dataset_fields', 'resource_fields'):
+        fields = schema.get(key)
+        if not isinstance(fields, list):
+            continue
+        for field in fields:
+            if isinstance(field, dict) and field.get('ai_suggestion', False):
+                return True
+    return False
 
 def scheming_is_valid_suggestion(field, value):
     """

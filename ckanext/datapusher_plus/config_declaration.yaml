@@ -22,6 +22,28 @@ groups:
         description: |
           Ignore file hash
 
+      - key: ckanext.datapusher_plus.file_hash_algorithm
+        editable: true
+        default: blake3
+        description: |
+          Algorithm used to hash the downloaded resource file. The hash
+          is used internally for upload-skip (dedup) and as the Redis
+          cache key, and is stored on the CKAN resource record's
+          ``hash`` field. Allowed values (case-insensitive):
+
+          * ``blake3`` (default) — ~10x faster than sha256 on commodity
+            hardware. Requires the ``blake3`` Python package (already
+            in requirements.txt). The ``b3sum`` CLI is also installed
+            in the worker image for ad-hoc / debugging use.
+          * ``sha256`` — DCAT3 + Croissant interop format. Pick this
+            when the published resource hash needs to match those
+            standards.
+          * ``md5`` — legacy compatibility with pre-#221 stored hashes.
+            Do not use for security purposes.
+
+          Switching the algorithm invalidates all prior hash comparisons
+          — every resource will be re-ingested once after the change.
+
       - key: ckanext.datapusher_plus.chunk_size
         editable: true
         default: 16384
@@ -41,15 +63,67 @@ groups:
         description: |
           Download proxy
 
+      - key: ckanext.datapusher_plus.download_always_whitelist
+        editable: true
+        default: ""
+        description: |
+          Whitespace-separated list of hostnames whose resources should
+          always be re-processed by DP+, bypassing the file-hash-based
+          upload-skip optimization (see ``_should_skip_upload`` in the
+          download stage). Use this for hosts that update content in
+          place without changing the published byte hash (e.g., daily-
+          refreshed reports that overwrite the same URL with the same
+          bytes but logically-different rows), or for local/peered
+          hosts where re-download cost is negligible and operators
+          want forced re-analysis on every push.
+
+          The download stage reads this value live from ``tk.config``
+          (per the ``file_hash_algorithm`` pattern from #221), so
+          admin-UI edits take effect on the next download — no worker
+          restart needed.
+
+          Matching is case-insensitive on the URL hostname and ports
+          are ignored. **Exact-match only** — ``data.gov`` in the
+          whitelist does NOT match ``subdomain.data.gov``; list each
+          host separately if you need multiple subdomains. Empty
+          (default) → all hosts go through the normal hash-skip
+          path.
+
+          Example::
+
+              ckanext.datapusher_plus.download_always_whitelist =
+                  data.internal.gov data.partner.org localhost
+
+          Issue #61.
+
+      - key: ckanext.datapusher_plus.dictionary_stash_dir
+        editable: true
+        default: ""
+        description: |
+          Directory where the per-resource Data Dictionary stash files
+          live. The analysis stage writes a small JSON snapshot here
+          before deleting the existing datastore resource, and the
+          database rollback hook reads it back to restore the
+          operator's annotations if any later stage fails (issue #265).
+          Empty (default) → ``<tempdir>/dpp_dict_stash``. For deployments
+          where ``/tmp`` is wiped on container restart, set this to a
+          persistent path.
+
       - key: ckanext.datapusher_plus.types
         description: |
           Types of files to be processed
         default: csv xls xlsx tsv application/csv application/vnd.ms-excel application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 
       - key: ckanext.datapusher_plus.type_mapping
-        default: '{"String": "text", "Integer": "numeric","Float": "numeric","DateTime": "timestamp","Date": "timestamp","NULL": "text"}'
+        default: '{"String": "text", "Integer": "numeric","Float": "numeric","DateTime": "timestamp","Date": "date","NULL": "text"}'
         description: |
-          Mapping of file types to their respective processors
+          Mapping of qsv-inferred field types to their Postgres
+          datastore types. ``Date`` maps to Postgres ``date`` (not
+          ``timestamp``) so a CSV column containing date-only values
+          (e.g. ``2023-02-02``) is stored as a date and rendered
+          accordingly — issue #179. Only ``DateTime`` (date + time)
+          maps to ``timestamp`` and gets the RFC-3339 normalization
+          that adds ``T00:00:00`` for the time component.
 
       - key: ckanext.datapusher_plus.pii_screening
         type: bool
@@ -102,6 +176,71 @@ groups:
         description: |
           Prefer DMY
 
+      - key: ckanext.datapusher_plus.default_locale
+        editable: true
+        default: ""
+        description: |
+          Default CLDR locale identifier used to parse numeric values
+          in CSVs whose locale isn't declared on the resource itself
+          (via ``dpp_locale``). Format: BCP 47 / POSIX-style identifier
+          like ``de_DE``, ``fr_FR``, ``en_US``. Empty string disables
+          locale-based normalization globally.
+
+          When a locale is resolved, ``AnalysisStage`` runs a Python
+          preprocessing pass using ``babel.numbers.parse_decimal``:
+          each cell that parses cleanly in that locale is rewritten to
+          dot-decimal fixed-point (no thousands separator, no
+          scientific notation). Cells that don't parse (strings,
+          empty, mixed-format) are left verbatim. qsv stats then
+          infers ``Float`` on the normalized cells.
+
+          Resolution order per resource (first non-empty wins):
+
+          1. ``context.resource.get('dpp_locale')`` (per-resource)
+          2. ``ckanext.datapusher_plus.default_locale`` (this setting)
+          3. ``ckanext.datapusher_plus.decimal_separator`` (separator-only fallback)
+          4. None of the above → no preprocessing
+
+          Known v1 limitations:
+
+          * ``de_CH`` (Swiss German) returns ``.`` as its decimal
+            symbol, so the locale path skips it. Swiss numbers use
+            ``'`` for thousands (``1'234.56``) — use
+            ``decimal_separator = "'"`` as a partial workaround if you
+            need apostrophe-thousands stripping.
+          * Mixed-locale columns (some rows use ``.``, some use
+            ``,``) fall back to ``String`` — babel rejects the
+            ``.`` rows and qsv stats sees mixed types.
+          * Accounting notation like ``(57,957)`` is not parsed
+            (babel raises ``NumberFormatError``); cells stay verbatim.
+          * Per-column locale override is not in v1. A
+            ``dpp_column_locales`` map could land later.
+
+          Added in resolution of issue #112.
+
+      - key: ckanext.datapusher_plus.decimal_separator
+        editable: true
+        default: ""
+        description: |
+          Last-resort decimal separator override. Single character.
+          Used only when no locale resolves from ``dpp_locale`` or
+          ``default_locale``. Treated as a regex literal so weirder
+          separators (``';`` etc.) don't blow up.
+
+          When set, ``AnalysisStage`` runs an anchored ``qsv replace``
+          over the working CSV that swaps the separator for ``.``
+          ONLY in cells matching ``^-?\d+<sep>\d+$``. Strings stay
+          untouched because they don't match the whole-cell pattern.
+
+          Prefer ``default_locale`` (or per-resource ``dpp_locale``)
+          when you have CLDR locale info — that path also handles
+          thousands separators and other locale-specific shapes.
+          ``decimal_separator`` exists for synthetic data, non-CLDR
+          formats, and the Swiss-thousands workaround documented under
+          ``default_locale``.
+
+          Added in resolution of issue #112.
+
       - key: ckanext.datapusher_plus.preview_rows
         type: int
         editable: true
@@ -112,9 +251,56 @@ groups:
       - key: ckanext.datapusher_plus.auto_index_threshold
         type: int
         editable: true
+        default: 10
+        description: |
+          Upper-bound cardinality (number of distinct values) for which a
+          column gets an auto-generated B-tree index. A column qualifies
+          when its cardinality is in the closed range
+          ``[auto_index_min_threshold, auto_index_threshold]``.
+
+          The intent is to accelerate filtering UIs (DataTables
+          SearchBuilder, CKAN's facet-style views) and SQL aggregations
+          over enum-shaped columns (Borough = 5 values, status = 3-10,
+          etc.). Auto-indexing is deliberately *not* applied to
+          higher-cardinality columns: a B-tree index there may well be
+          useful, but the right index depends on the actual query
+          patterns (which columns get filtered, sorted, joined). Blindly
+          indexing every high-cardinality column on ingest inflates
+          storage, slows COPY, and adds vacuum/bloat pressure for
+          indexes the workload may never use. Higher-cardinality
+          indexes are best added manually based on observed query
+          patterns.
+
+          Set to ``-1`` to remove the upper bound entirely (interpreted
+          as ``record_count``). Set to ``0`` to disable cardinality-based
+          auto-indexing (date / unique-index auto-creation is unaffected).
+
+          Default raised from 3 → 10 with issue #142 — the prior default
+          was tuned for small enum columns but mis-skipped the typical
+          DataTables filtering range.
+
+      - key: ckanext.datapusher_plus.auto_index_min_threshold
+        type: int
+        editable: true
         default: 3
         description: |
-          Auto index threshold
+          Lower-bound cardinality for the auto-index sweet spot
+          (``[auto_index_min_threshold, auto_index_threshold]``).
+
+          A column with cardinality below this threshold (e.g. a
+          single-value text column producing a 10-40MB index the Postgres
+          planner will never use) is skipped — that was issue #142's
+          concrete failure mode under the old single-knob design.
+
+          Set to ``0`` to disable the floor entirely (legacy behavior;
+          recommended pairing when ``auto_index_threshold = -1`` is used
+          to mean "index every column"). ``1`` works equivalently in
+          practice — column cardinality is always ``>= 1`` for any
+          column with at least one row — but ``0`` is the documented
+          sentinel because it reads as "no floor" rather than
+          "floor at the minimum possible cardinality".
+
+          Added in resolution of issue #142.
 
       - key: ckanext.datapusher_plus.auto_unique_index
         type: bool
@@ -129,6 +315,89 @@ groups:
         default: true
         description: |
           Auto index dates
+
+      - key: ckanext.datapusher_plus.auto_csv_spatial_extent
+        type: bool
+        editable: true
+        default: true
+        description: |
+          For CSV resources with detected latitude/longitude columns,
+          persist a ``dpp_spatial_extent`` BoundingBox derived from
+          the qsv stats min/max of those columns. Shapefile / GeoJSON
+          resources already get this from FormatConverterStage; this
+          flag only governs the CSV path.
+
+      - key: ckanext.datapusher_plus.enable_ai_suggestions
+        type: bool
+        editable: true
+        default: false
+        description: |
+          Opt-in flag for the AISuggestionsStage. When True, after the
+          AnalysisStage produces stats / frequency caches, DP+ shells
+          out to ``qsv describegpt --description --dictionary --tags
+          --json`` and stores the returned description / tags /
+          dictionary under ``package["dpp_suggestions"]["ai_suggestions"]``
+          for scheming form helpers to surface.
+
+          Off by default because the LLM round-trip needs an
+          OpenAI-compatible endpoint that the operator must configure
+          (Ollama, OpenRouter, OpenAI, vLLM, …) and would otherwise
+          burn API budget / wall-clock seconds on every push.
+
+          Stage failures (endpoint unreachable, qsv timeout, malformed
+          JSON, …) are non-blocking — the rest of the pipeline still
+          completes successfully and the suggestions key is simply
+          absent.
+
+      - key: ckanext.datapusher_plus.describegpt_config_path
+        editable: true
+        default: ""
+        description: |
+          Path to qsv's ``describegpt`` prompt-file (the same one the
+          ``qsv describegpt`` CLI loads via its ``--prompt-file`` flag).
+          Defines the LLM endpoint (``base_url``), model, prompt
+          template, output format, timeouts, and language. qsv expects
+          this to be TOML.
+
+          Empty (the default) lets qsv use its own discovery — qsv
+          looks for ``dp.prompt`` / ``dp_prompt.toml`` next to its
+          binary, then falls back to the ``QSV_LLM_BASE_URL`` env var.
+
+          For ``format``, set it to ``"JSON"`` in the prompt-file —
+          ``AISuggestionsStage`` parses qsv's structured envelope and
+          a Markdown response would fail JSON parsing (the stage's
+          non-blocking try/except would catch it, but the suggestions
+          would silently never populate).
+
+          API keys are NOT proxied through ckan.ini (would land in
+          CKAN's config dump). Operators have two paths:
+
+          * **Cloud LLM** (OpenAI / OpenRouter / etc.): set
+            ``QSV_LLM_APIKEY`` in the worker container's environment.
+
+          * **Local LLM via container-host hostname** (Ollama on
+            ``host.docker.internal``, LM Studio on
+            ``host.local``, etc.): qsv 20.0.0 treats any non-localhost
+            base URL as "needs auth" and refuses to start without a
+            key. Set ``QSV_LLM_APIKEY=NONE`` in the worker
+            environment — qsv accepts ``NONE`` as the explicit
+            "this is an unauthenticated local endpoint" sentinel.
+
+          Only consulted when
+          ``ckanext.datapusher_plus.enable_ai_suggestions`` is True.
+
+      - key: ckanext.datapusher_plus.describegpt_timeout_seconds
+        type: int
+        editable: true
+        default: 120
+        description: |
+          Per-invocation timeout for the ``qsv describegpt`` subprocess
+          call, in seconds. A hung LLM endpoint hits this rather than
+          ``QSV_COMMAND_TIMEOUT`` (default 1800s), keeping a stuck
+          describegpt from delaying the rest of the pipeline.
+
+          Only consulted when
+          ``ckanext.datapusher_plus.enable_ai_suggestions`` is True.
 
       - key: ckanext.datapusher_plus.sort_and_dupe_check
         type: bool
@@ -183,3 +452,102 @@ groups:
         default: INFO
         description: |
           Upload log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+
+      # ---------------------------------------------------------------
+      # Prefect orchestration (v3.0+)
+      # ---------------------------------------------------------------
+      - key: ckanext.datapusher_plus.prefect_deployment_name
+        editable: true
+        default: datapusher-plus/datapusher-plus
+        description: |
+          Fully-qualified Prefect deployment name in the form
+          ``<flow-name>/<deployment-name>``. Run ``ckan datapusher_plus
+          prefect-deploy`` once after install to register it.
+
+      - key: ckanext.datapusher_plus.prefect_work_pool
+        editable: true
+        default: datapusher-plus
+        description: |
+          Prefect work-pool name. Workers subscribe to this pool with
+          ``prefect worker start -p <name>``.
+
+      - key: ckanext.datapusher_plus.prefect_work_pool_type
+        editable: true
+        default: process
+        description: |
+          Work-pool type ``prefect-deploy`` creates the pool with when
+          it does not already exist. Defaults to ``process`` (a worker
+          on the same host as CKAN). Operators on Kubernetes / Docker /
+          ECS push pools set this to the matching type.
+
+      - key: ckanext.datapusher_plus.prefect_flow
+        editable: true
+        default: ""
+        description: |
+          Optional Python import path to a custom @flow that composes
+          DataPusher+ tasks differently. Format: ``module.path:flow_name``.
+          When empty, the built-in ``datapusher_plus_flow`` is used.
+
+      - key: ckanext.datapusher_plus.prefect_ui_base
+        editable: true
+        default: ""
+        description: |
+          Base URL of the Prefect UI (e.g. ``http://prefect-server:4200``).
+          When set, ``datapusher_status`` returns a ``job_url`` that
+          deep-links into the run page.
+
+      - key: ckanext.datapusher_plus.flow_timeout
+        type: int
+        editable: true
+        default: 7200
+        description: |
+          Outer flow-run timeout in seconds. Replaces v2's
+          ``ckan.datapusher.timeout``. Per-task timeouts and qsv
+          subprocess timeouts still apply inside the envelope.
+
+      - key: ckanext.datapusher_plus.download_retries
+        type: int
+        editable: true
+        default: 3
+        description: |
+          Max retries for the download task (exponential backoff
+          10s/60s/300s). Lower this when working with brittle upstream
+          sources that should fail fast rather than retry.
+
+      - key: ckanext.datapusher_plus.database_retries
+        type: int
+        editable: true
+        default: 2
+        description: |
+          Max retries for the Postgres COPY task (30s delay between
+          attempts). Useful for transient datastore connectivity blips.
+
+      - key: ckanext.datapusher_plus.max_quarantine_pct
+        editable: true
+        default: 5.0
+        description: |
+          Maximum percentage of rows that may be quarantined by the
+          validation task before the flow fails. Quarantined rows are
+          written to a sibling CSV; only rates above this threshold abort
+          the run.
+
+      - key: ckanext.datapusher_plus.pii_review_threshold
+        type: int
+        editable: true
+        default: 0
+        description: |
+          When > 0 and full PII screening finds more than this many PII
+          candidate matches, the flow suspends and waits for human
+          approval via the Prefect UI before continuing. In quick-screen
+          mode (``pii_quick_screen = true``) only PII *presence* is
+          detected, so any value > 0 makes the flow suspend whenever PII
+          is found at all (the threshold acts purely as on/off there).
+
+      - key: ckanext.datapusher_plus.result_storage_block
+        editable: true
+        default: local-file-system/datapusher-plus-results
+        description: |
+          Prefect Block reference for task-result persistence (used by
+          "re-run from failed task"). Format: ``<type-slug>/<name>``.
+          Defaults to a local filesystem block; switch to an S3/GCS
+          block for multi-host worker pools.

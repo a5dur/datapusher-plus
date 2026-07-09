@@ -2,6 +2,7 @@
 # flake8: noqa: E501
 
 import csv
+import json
 import psycopg2
 from psycopg2 import sql
 import shutil
@@ -54,6 +55,7 @@ class QSVCommand:
         text: bool = True,
         env: Optional[Dict[str, str]] = None,
         uses_stdio: bool = False,
+        timeout: Optional[float] = None,
     ) -> Union[subprocess.CompletedProcess, Dict[str, Any], str]:
         """
         Run a qsv command with the given arguments.
@@ -64,12 +66,16 @@ class QSVCommand:
             capture_output: Whether to capture stdout and stderr
             text: Whether to return output as text
             env: Optional environment variables
+            timeout: Per-call override (seconds). Defaults to
+                ``conf.QSV_COMMAND_TIMEOUT`` so a hung qsv invocation never
+                pins an RQ worker indefinitely.
 
         Returns:
             The result of subprocess.run
 
         Raises:
-            utils.JobError: If the command fails and check is True
+            utils.JobError: If the command fails and check is True, or if the
+                command times out.
         """
 
         args = [self.qsv_bin] + args
@@ -77,24 +83,43 @@ class QSVCommand:
         # Convert all args to str to avoid TypeError with Path objects
         str_args = [str(arg) for arg in args]
 
+        effective_timeout = timeout if timeout is not None else conf.QSV_COMMAND_TIMEOUT
+
         try:
             self.logger.trace(f"Running qsv command: {' '.join(str_args)}")
             result = subprocess.run(
-                str_args, check=check, capture_output=capture_output, text=text, env=env
+                str_args,
+                check=check,
+                capture_output=capture_output,
+                text=text,
+                env=env,
+                timeout=effective_timeout,
             )
             return result
+        except subprocess.TimeoutExpired as e:
+            error_msg = (
+                f"qsv command timed out after {effective_timeout}s: "
+                f"{' '.join(str_args)}"
+            )
+            self.logger.error(error_msg)
+            raise utils.JobError(error_msg) from e
         except subprocess.CalledProcessError as e:
             if uses_stdio:
-                stdio = {}
-                stdio["stdout"] = e.stdout
-                stdio["stderr"] = e.stderr
-                return stdio
+                # Callers that opt into stdio capture handle their own failure
+                # logic and just want the raw stdout/stderr back.
+                return {"stdout": e.stdout, "stderr": e.stderr}
+
+            # Always log AND always raise when check=True — previously the
+            # raise was nested inside `if e.stderr:`, so failures with empty
+            # stderr silently returned None/"" and slipped past callers that
+            # had asked for check=True. Build the message with stderr when we
+            # have it, fall back to the exception's str otherwise.
             error_msg = f"qsv command failed: {e}"
-            if hasattr(e, "stderr") and e.stderr:
+            if getattr(e, "stderr", None):
                 error_msg += f" - {e.stderr}"
-                self.logger.error(error_msg)
-                if check:
-                    raise utils.JobError(error_msg)
+            self.logger.error(error_msg)
+            if check:
+                raise utils.JobError(error_msg) from e
             return e.stderr
 
     def version(self) -> str:
@@ -302,6 +327,7 @@ class QSVCommand:
         input_file: str,
         trim_headers: bool = True,
         output_file: Optional[str] = None,
+        delimiter: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """
         Normalize and transcode a CSV/TSV/TAB file to UTF-8.
@@ -310,6 +336,9 @@ class QSVCommand:
             input_file: Path to the input file
             trim_headers: Whether to trim headers
             output_file: Path to the output file
+            delimiter: Input delimiter override (e.g. ``";"`` or a tab).
+                When ``None``, qsv assumes comma. The output is always
+                comma-delimited regardless.
 
         Returns:
             The result of the command
@@ -319,6 +348,9 @@ class QSVCommand:
         """
         args = ["input", input_file]
 
+        if delimiter:
+            args.extend(["--delimiter", delimiter])
+
         if trim_headers:
             args.append("--trim-headers")
 
@@ -327,9 +359,39 @@ class QSVCommand:
 
         return self._run_command(args)
 
+    def sniff(self, input_file: str) -> Optional[Dict[str, Any]]:
+        """
+        Sniff a CSV's metadata (delimiter, header row, ...) via ``qsv sniff``.
+
+        Best-effort: returns the parsed ``qsv sniff --json`` dict, or
+        ``None`` when sniffing fails or the output is not valid JSON.
+        Callers should treat ``None`` as "could not determine" and fall
+        back to qsv's defaults.
+
+        Args:
+            input_file: Path to the file to sniff
+
+        Returns:
+            The sniff result dict, or ``None`` on failure
+        """
+        result = self._run_command(["sniff", "--json", input_file], check=False)
+        stdout = getattr(result, "stdout", None)
+        if not stdout:
+            return None
+        try:
+            return json.loads(stdout)
+        except (ValueError, TypeError):
+            return None
+
     def validate(self, input_file: str) -> subprocess.CompletedProcess:
         """
-        Validate a CSV file against RFC4180.
+        Validate a CSV file against the RFC 4180 standard.
+
+        Note: qsv's ``--valid`` and ``--invalid`` row-routing flags only
+        emit output files in JSON-Schema mode, not in RFC 4180 mode that
+        DP+ uses. Row-level quarantine is handled in
+        ``ValidationStage._validate_csv`` via Python's ``csv`` module
+        when this strict check fails.
 
         Args:
             input_file: Path to the CSV file
@@ -338,7 +400,8 @@ class QSVCommand:
             The result of the command
 
         Raises:
-            utils.JobError: If the command fails
+            utils.JobError: If the command fails (i.e., RFC 4180
+                violations were found).
         """
         return self._run_command(["validate", input_file])
 
@@ -563,6 +626,149 @@ class QSVCommand:
             args.extend(["--output", output_file])
 
         return self._run_command(args)
+
+    def describegpt(
+        self,
+        input_file: str,
+        prompt_file: Optional[str] = None,
+        description: bool = True,
+        dictionary: bool = True,
+        tags: bool = True,
+        json_output: bool = True,
+        output_file: Optional[str] = None,
+        timeout: Optional[float] = None,
+        env: Optional[Dict[str, str]] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> subprocess.CompletedProcess:
+        """
+        Run ``qsv describegpt`` against a CSV to get LLM-generated
+        description / per-field dictionary / tags.
+
+        Thin wrapper — qsv owns the actual LLM round-trip (endpoint,
+        model, prompt template, API key all live in ``prompt_file`` or
+        qsv's environment, NOT in DP+ config). The wrapper just stitches
+        the flags together and invokes the subprocess.
+
+        Output shape (with ``json_output=True``, validated against qsv
+        20.0.0)::
+
+            {
+              "Dictionary": {
+                "response": {
+                  "fields": [
+                    {"name": "...", "type": "...", "label": "...",
+                     "description": "...", "min": "...", "max": "...",
+                     "cardinality": N, "enumeration": ...,
+                     "null_count": N, "examples": "..."}
+                  ],
+                  "enum_threshold": N, "num_examples": N,
+                  "truncate_str": N, "attribution": "..."
+                },
+                "reasoning": "...", "token_usage": {...}
+              },
+              "Description": {
+                "response": "<markdown string>",
+                "reasoning": "...", "token_usage": {...}
+              },
+              "Tags": {
+                "response": {"tags": [...], "attribution": "..."},
+                "reasoning": "...", "token_usage": {...},
+                "num_tags": N, "tag_vocab": ...
+              }
+            }
+
+        ``AISuggestionsStage._reshape_for_ui`` consumes this and emits
+        the per-field ``{value, source}`` map the scheming UI reads.
+
+        Args:
+            input_file: Path to the CSV (the file qsv describes).
+            prompt_file: Optional path to qsv's describegpt prompt /
+                config file (TOML). When omitted, qsv falls back to its
+                own discovery (``~/.qsv/describegpt.toml`` etc.) and
+                ``OPENAI_API_KEY`` from the environment. Maps to
+                ``--prompt-file``.
+            description: Include the overall dataset description.
+                Maps to ``--description``. Default True.
+            dictionary: Include the per-field dictionary.
+                Maps to ``--dictionary``. Default True.
+            tags: Include the tag list. Maps to ``--tags``. Default True.
+            json_output: When True, request the structured JSON envelope
+                described above (``--format JSON``). When False, qsv
+                emits the default Markdown report. Default True — the
+                AISuggestionsStage's JSON parse depends on this.
+
+                Note: qsv 20.0.0 controls output format via
+                ``--format <Markdown|TSV|JSON|TOON>``, NOT a ``--json``
+                flag (an earlier draft of this wrapper assumed the
+                latter and produced ``Unknown flag: '--json'`` at
+                runtime).
+            output_file: Optional path to write the result to. When
+                omitted, the result lands in ``CompletedProcess.stdout``.
+            timeout: Per-call subprocess timeout, in seconds. Defaults
+                to ``conf.DESCRIBEGPT_TIMEOUT_SECONDS`` (120s) so a hung
+                LLM endpoint doesn't pin a worker for the full
+                ``QSV_COMMAND_TIMEOUT`` (1800s default).
+            env: Optional environment overrides for the subprocess
+                (e.g. ``{"OPENAI_API_KEY": "..."}`` if the caller has a
+                key it wants to inject out-of-band).
+            api_key: Optional value for ``--api-key``. Required when
+                the LLM endpoint isn't on ``localhost`` (qsv treats
+                non-localhost base URLs as "not a local LLM" and
+                refuses to start without an API key). For unauthenticated
+                local LLMs reached via container-host hostnames
+                (``host.docker.internal``, ``host.local``, …) pass the
+                literal string ``"NONE"`` — qsv accepts it as the
+                "I know this is unauthenticated, get on with it" sentinel.
+                When omitted, qsv reads ``QSV_LLM_APIKEY`` from the
+                environment (or the prompt-file).
+            base_url: Optional override for ``--base-url`` — lets
+                callers point at a different LLM endpoint without
+                rewriting the prompt-file. When omitted, qsv reads
+                ``base_url`` from the prompt-file.
+
+        Returns:
+            The result of ``subprocess.run``. ``stdout`` is the
+            describegpt output (JSON envelope when ``json_output=True``,
+            Markdown otherwise).
+
+        Raises:
+            utils.JobError: If the subprocess fails (non-zero exit or
+                timeout). Callers in the AISuggestionsStage catch
+                ``JobError`` so describegpt failures don't bring down
+                the pipeline.
+        """
+        args: List[Union[str, Path]] = ["describegpt"]
+
+        if description:
+            args.append("--description")
+        if dictionary:
+            args.append("--dictionary")
+        if tags:
+            args.append("--tags")
+        if json_output:
+            args.extend(["--format", "JSON"])
+        if prompt_file:
+            args.extend(["--prompt-file", prompt_file])
+        if output_file:
+            args.extend(["--output", output_file])
+        # Use ``is not None`` rather than truthiness so an explicit
+        # empty string isn't silently dropped — the docstring says
+        # ``None`` is the documented "omit" sentinel, so anything else
+        # (including ``""``) should pass through. In practice ``""``
+        # is nonsensical for these flags, but matching the documented
+        # contract keeps the wrapper predictable.
+        if api_key is not None:
+            args.extend(["--api-key", api_key])
+        if base_url is not None:
+            args.extend(["--base-url", base_url])
+
+        args.append(input_file)
+
+        effective_timeout = (
+            timeout if timeout is not None else conf.DESCRIBEGPT_TIMEOUT_SECONDS
+        )
+        return self._run_command(args, timeout=effective_timeout, env=env)
 
     def slice(
         self,

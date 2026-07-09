@@ -24,6 +24,124 @@ from ckanext.datapusher_plus.jobs.stages.base import BaseStage
 from ckanext.datapusher_plus.jobs.context import ProcessingContext
 
 
+# Issue #221: factory for the configured file-hash algorithm. Returns an
+# object with the standard ``.update(bytes)`` / ``.hexdigest()`` shape
+# so the streaming-download loop doesn't care which algorithm it's
+# feeding. ``hashlib`` exposes sha256 and md5 directly; ``blake3`` ships
+# the same protocol via a separate package (already in requirements.txt).
+#
+# Returning a fresh hasher per call (rather than caching) is intentional
+# — hashlib objects are stateful and must not be reused across downloads.
+def _get_file_hasher():
+    """Return a new hasher instance for the configured algorithm.
+
+    Reads ``ckanext.datapusher_plus.file_hash_algorithm`` from
+    ``tk.config`` **live** at each call. Because the config key is
+    declared ``editable: true`` in ``config_declaration.yaml``,
+    operators expect a runtime change via the admin UI to take effect
+    without a worker restart — caching the value at import would
+    silently break that contract. The factory is called once per
+    resource download, so the dict lookup overhead is negligible.
+
+    Raises ``utils.JobError`` for an unknown algorithm name rather than
+    silently falling back, so a typo in ``ckan.ini`` surfaces at the
+    first download instead of producing inscrutable hash mismatches
+    downstream.
+    """
+    # ``tk`` is the CKAN toolkit; ``tk.config`` is the live config dict
+    # the admin UI mutates. Local import keeps the module-load time
+    # path of this file unchanged and matches the rest of the codebase
+    # idiom of pulling ``tk`` in where needed.
+    import ckan.plugins.toolkit as tk
+
+    algo = tk.config.get(
+        "ckanext.datapusher_plus.file_hash_algorithm", "blake3"
+    ).lower()
+    if algo == "blake3":
+        # ``blake3`` is a hard requirement in requirements.txt; if the
+        # import fails the install is broken, not a config issue.
+        from blake3 import blake3 as _blake3  # type: ignore[import-untyped]
+
+        return _blake3()
+    if algo == "sha256":
+        return hashlib.sha256()
+    if algo == "md5":
+        # DevSkim flags md5 as DS126858; we keep it as a legacy
+        # compatibility knob, not for security. Same suppression as the
+        # original site this factory replaces.
+        return hashlib.md5()  # DevSkim: ignore DS126858
+    raise utils.JobError(
+        f"Unknown ckanext.datapusher_plus.file_hash_algorithm={algo!r}. "
+        f"Allowed values: 'blake3', 'sha256', 'md5'."
+    )
+
+
+def _get_download_always_whitelist():
+    """Return the parsed DOWNLOAD_ALWAYS_WHITELIST from live config.
+
+    Reads ``ckanext.datapusher_plus.download_always_whitelist`` from
+    ``tk.config`` live (declared ``editable: true`` in
+    ``config_declaration.yaml``) so admin-UI edits take effect without
+    a worker restart. Mirrors the ``_get_file_hasher`` pattern from
+    issue #221. Parses on each call; the cost is negligible since the
+    hash-skip check fires at most once per download.
+
+    Returns:
+        ``frozenset`` of lowercased hostnames. Empty set if the
+        config is unset, empty, or the value is malformed.
+    """
+    import ckan.plugins.toolkit as tk
+
+    raw = tk.config.get(
+        "ckanext.datapusher_plus.download_always_whitelist", ""
+    )
+    if isinstance(raw, str):
+        raw = raw.split()
+    try:
+        return frozenset(h.lower() for h in raw if h)
+    except (TypeError, AttributeError):
+        # Defensive: malformed config (e.g., a non-iterable) should
+        # degrade to "no host bypass" rather than crash the download.
+        return frozenset()
+
+
+def _host_in_always_whitelist(url):
+    """Return the matched hostname if ``url``'s host is whitelisted, else ``None``.
+
+    Used by the download stage to bypass the hash-skip optimization
+    in ``_should_skip_upload`` for trusted/peered hosts or hosts
+    that update content in place without changing the published
+    byte hash. See issue #61 for the operator-side rationale.
+
+    Returning the matched host (rather than a bare ``bool``) lets
+    the caller log the host without a second ``urlparse`` call.
+
+    Args:
+        url: The resource URL as stored in ``resource["url"]``.
+
+    Returns:
+        The lowercased hostname (with port stripped) when matched;
+        ``None`` when the whitelist is empty, the URL is missing or
+        unparseable, the URL has no hostname (relative URLs,
+        ``file://`` with empty host, etc.), or the host is not in
+        the whitelist. Matching is exact: ``data.gov`` in the
+        whitelist does NOT match ``subdomain.data.gov``.
+    """
+    whitelist = _get_download_always_whitelist()
+    if not whitelist:
+        return None
+    if not url:
+        return None
+    try:
+        host = urlparse(url).hostname
+    except (ValueError, AttributeError):
+        return None
+    if not host:
+        return None
+    host = host.lower()
+    return host if host in whitelist else None
+
+
 class DownloadStage(BaseStage):
     """
     Downloads the resource file, validates it, and handles ZIP extraction.
@@ -284,8 +402,12 @@ class DownloadStage(BaseStage):
         context.update_tmp(tmp)
 
         length = 0
-        # Using MD5 for file deduplication only (not for security)
-        m = hashlib.md5()  # DevSkim: ignore DS126858
+        # Issue #221: algorithm is selected from
+        # ``ckanext.datapusher_plus.file_hash_algorithm`` (default
+        # ``blake3``). See ``_get_file_hasher`` for the contract. The
+        # hash is used for upload-skip / cache-key / resource ``hash``
+        # field — not for cryptographic integrity.
+        m = _get_file_hasher()
 
         # Log download start
         cl = response.headers.get("content-length")
@@ -318,12 +440,33 @@ class DownloadStage(BaseStage):
 
         Args:
             context: Processing context
-            file_hash: MD5 hash of downloaded file
+            file_hash: Hash of the downloaded file (algorithm per
+                ``ckanext.datapusher_plus.file_hash_algorithm`` —
+                blake3 by default, can be ``sha256`` or ``md5``;
+                see #221).
             response_headers: HTTP response headers
 
         Returns:
             True if upload should be skipped, False otherwise
         """
+        # Issue #61: forced re-processing for operator-whitelisted hosts.
+        # Bypasses the hash-skip path entirely so resources from these
+        # hosts get re-downloaded + re-analyzed on every push. This is
+        # intended for hosts that update content in place without
+        # changing the byte hash (e.g., a daily report that overwrites
+        # the same URL with the same template but new underlying data),
+        # or for local/peered hosts where re-download is essentially
+        # free and operators want forced re-analysis.
+        url = context.resource.get("url", "") if context.resource else ""
+        matched_host = _host_in_always_whitelist(url)
+        if matched_host:
+            context.logger.info(
+                "Host %r is in DOWNLOAD_ALWAYS_WHITELIST; forcing "
+                "re-processing (bypassing hash-skip).",
+                matched_host,
+            )
+            return False
+
         # Check if resource metadata was updated
         resource_updated = False
         resource_last_modified = context.resource.get("last_modified")

@@ -1,7 +1,7 @@
 [project]
 name = "datapusher-plus"
-version = "2.0.0"
-description = "Next-generation, extensible Data Ingestion framework for CKAN. Accelerated by qsv."
+version = "3.0.0a0"
+description = "Next-generation, extensible Data Ingestion framework for CKAN. Accelerated by qsv and orchestrated by Prefect."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "AGPL-3.0-or-later" }
@@ -31,6 +31,13 @@ classifiers = [
 	"Topic :: Software Development :: Libraries :: Application Frameworks",
 	"Topic :: Database",
 ]
+# The actual dependencies live in requirements.txt / requirements-dev.txt;
+# declare them as dynamic so the [tool.setuptools.dynamic] block below
+# actually takes effect. Without this marker, ``pip install -e .``
+# installs the package with no dependencies — fiona, shapely, prefect,
+# etc. all silently absent, which is why the integration stack's CKAN
+# container couldn't import prefect for ``datapusher_plus prefect-deploy``.
+dynamic = ["dependencies", "optional-dependencies"]
 
 [project.urls]
 Homepage = "https://github.com/dathere/datapusher-plus"
@@ -51,7 +58,25 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = { find = { where = ["."], exclude = ["tests*"] } }
+# Tell setuptools to include MANIFEST.in-listed data files (yaml, json, html,
+# js, mo, etc.) inside the *wheel* as well, not just the sdist. Without this,
+# `pip install datapusher-plus` from PyPI builds a wheel that omits
+# `config_declaration.yaml` and the bundled templates/JS — surfaces as
+# "config_declaration.yaml file is missing" at plugin load time (see #251).
+include-package-data = true
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
 optional-dependencies = { dev = { file = ["requirements-dev.txt"] } }
+
+# pytest config lives here (moved from setup.cfg) so build metadata has a
+# single source of truth in pyproject.toml. setup.cfg now only holds babel
+# i18n command config, and setup.py only holds the babel message_extractors
+# block (which has no pyproject-native equivalent).
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::sqlalchemy.exc.SADeprecationWarning",
+    "ignore::sqlalchemy.exc.SAWarning",
+    "ignore::DeprecationWarning",
+]
+addopts = "--pdbcls=IPython.terminal.debugger:TerminalPdb"

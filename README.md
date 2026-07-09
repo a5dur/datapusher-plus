@@ -8,8 +8,7 @@
 
 DataPusher+ is a fork of [Datapusher](https://github.com/ckan/datapusher) that combines the speed and robustness of [ckanext-xloader](https://github.com/ckan/ckanext-xloader) with the data type guessing of Datapusher - [super-powered with the ability to infer, calculate & suggest metadata using Jinja2 formulas defined in the scheming configuration file](docs/dataset_schema.yaml).
 
-
-https://github.com/user-attachments/assets/b2fc2c3a-d244-4d11-9cf3-8270f0e99162
+![DRUF + Suggestions demo: DP+ ingesting a CSV, inferring metadata via Jinja2 formulas, and surfacing per-field Suggestions in the CKAN scheming form](docs/images/druf-suggestions-demo.gif)
 
 
 The Formulas have access to not just the `package` and `resource` fields (in the same namespaces), it also has access to the following information in these additional namespaces that can be used in Jinja2 expressions:
@@ -195,130 +194,285 @@ DRUF is completely optional and disabled by default. When disabled:
 
 Datapusher+ from version 1.0.0 onwards will be installed as a extension of CKAN, and will be available as a CKAN plugin. This will allow for easier integration with CKAN and other CKAN extensions.
 
-1. Install the required packages.
+1. Install the required packages. We expect you are using a Linux distribution based on Ubuntu such as Ubuntu 24.04.
 
-    ```bash
-    sudo apt install python3-virtualenv python3-dev python3-pip python3-wheel build-essential libxslt1-dev libxml2-dev zlib1g-dev git libffi-dev libpq-dev uchardet
-    ```
+```bash
+sudo apt install python3-virtualenv python3-dev python3-pip python3-wheel build-essential libxslt1-dev libxml2-dev zlib1g-dev git libffi-dev libpq-dev uchardet -y
+```
 
 2. Activate the CKAN virtual environment using at least python 3.10.
 
-    ```bash
-    . /usr/lib/ckan/default/bin/activate
-    ```
+```bash
+. /usr/lib/ckan/default/bin/activate
+```
 
 3. Install the extension using following commands:
 
-    ```bash
-   pip install -e "git+https://github.com/dathere/datapusher-plus.git@2.0.0#egg=datapusher-plus"
-    ```
+```bash
+cd /usr/lib/ckan/default/src
+pip install -e "datapusher-plus@git+https://github.com/dathere/datapusher-plus.git@3.0.0"
+```
 
 4. Install the dependencies.
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+```bash
+cd datapusher-plus
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+```
 
-5. Install [qsv](https://github.com/dathere/qsv).
+5. Install [qsv](https://github.com/dathere/qsv), such as the `qsvdp` binary and move it to `/usr/local/bin/qsvdp` for access through the `PATH` environment variable.
 
-    ## Option 1: Debian Package Installation (Easiest)
-
-    [Download the appropriate precompiled binaries](https://github.com/dathere/qsv/releases/latest) for your platform and copy
-    it to the appropriate directory, e.g. for Linux:
-
-    ```bash
-    wget https://github.com/dathere/qsv/releases/download/4.0.0/qsv-4.0.0-x86_64-unknown-linux-gnu.zip
-    unzip qsv-4.0.0-x86_64-unknown-linux-gnu.zip
-    rm qsv-4.0.0-x86_64-unknown-linux-gnu.zip
-    sudo mv qsv* /usr/local/bin
-    ```
-
-    Alternatively, if you want to install qsv from source, follow
-    the instructions [here](https://github.com/dathere/qsv#installation). Note that when compiling from source,
-    you may want to look into the [Performance Tuning](https://github.com/dathere/qsv#performance-tuning)
-    section to squeeze even more performance from qsv.
-
-    Also, if you get glibc errors when starting qsv, your Linux distro may not have the required version of the GNU C Library
-    (This will be the case when running Ubuntu 18.04 or older).
-    If so, use the `unknown-linux-musl.zip` archive as it is statically linked with the MUSL C Library.
-
-    If you already have qsv, update it to the latest release by using the --update option.
-
-    `qsvdp --update`
-
-    > ℹ️ **NOTE:** qsv is a general purpose CSV data-wrangling toolkit that gets regular updates. To update to the latest version, just run
-    qsv with the `--update` option and it will check for the latest version and update as required.
-
-    ### Linux Installation
-
-    If you are running Debian based distribution, you can install qsv using the following command:
-    If you are running Debian based Linux distribution on x86_64, you can quickly install qsv using the following commands:
-
-    Add the qsv repository to your sources list:
-
-      ```bash
-      echo "deb [signed-by=/etc/apt/trusted.gpg.d/qsv-deb.gpg] https://dathere.github.io/qsv-deb-releases ./" > qsv.list
-      ```
-
-    Import trusted GPG key:
-
-      ```bash
-    wget -O - https://dathere.github.io/qsv-deb-releases/qsv-deb.gpg | sudo apt-key add -
-      ```
-
-    Install qsv:
-
-      ```bash
-      sudo apt update
-      sudo apt install qsv
-      ```
-
-    ## Option 2: Install Prebuilt qsv Binaries (Easy)
-    [Download the appropriate precompiled binaries](https://github.com/dathere/qsv/releases/latest) for your platform and copy it to the appropriate directory, e.g. for Ubuntu LTS 22.04 or 24.04:
-
-    ```bash
-    wget https://github.com/dathere/qsv/releases/download/4.0.0/qsv-4.0.0-x86_64-unknown-linux-gnu.zip
-    unzip qsv-4.0.0-x86_64-unknown-linux-gnu.zip
-    rm qsv-4.0.0-x86_64-unknown-linux-gnu.zip
-    sudo mv qsv* /usr/local/bin
-    ```
-
-    If you get glibc errors when starting qsv, your Linux distro may not have the required version of the GNU C Library. If so, use the `qsv-4.0.0-unknown-linux-musl.zip` archive as it is statically linked with the MUSL C Library.
+<details>
+<summary>qsv installation options (click here for more info)</summary>
 
 
-    > ℹ️ **NOTE:** qsv's prebuilt binaries have the ability to self-update to the latest version. Just run qsv with the `--update` option and it will check for the latest version and update itself as required.
-    > ```
-    > sudo qsvdp --update
-    > ```
+### Option 1: Install qsv from the Debian package
 
-    ## Option 3: Build qsv from source 
-    Finally, you can build qsvdp from source. It has the additional benefit that the resulting binary will take advantage of all the machine's CPU features, making qsv and DP+ even faster, but may take up to 30 minutes to compile.
-    
-    ```bash
-    git clone https://github.com/dathere/qsv.git
-    cd qsv
+If you are running a Debian-based Linux distribution on x86_64, you can quickly install qsv binaries including `qsvdp` using the following commands:
 
-    # install Rust, if it's not installed
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```bash
+# Add the qsv repository to your sources list:
+echo "deb [signed-by=/etc/apt/trusted.gpg.d/qsv-deb.gpg] https://dathere.github.io/qsv-deb-releases ./" > qsv.list
+# Import trusted GPG key:
+wget -O - https://dathere.github.io/qsv-deb-releases/qsv-deb.gpg | sudo apt-key add -
+# Install qsv:
+sudo apt update -y
+sudo apt install qsv -y
+```
 
-    # build qsvdp
-    CARGO_BUILD_RUSTFLAGS='-C target-cpu=native' cargo build --release --locked --bin qsvdp -F datapusher_plus
-    sudo cp target/release/qsvdp /usr/local/bin
-    cargo clean
-    ```
+### Option 2: Install prebuilt qsv binaries
 
-6. Create an API token for the DP+ Service account. 
-   Replace `CKAN_ADMIN` with an existing CKAN user with sysadmin privileges.
+[Download the appropriate prebuilt binaries](https://github.com/dathere/qsv/releases/latest) for your platform and copy
+it to the appropriate directory. For example you can use the following commands for qsv v20.1.0 on x86_64 Linux (you can update the version `20.1.0` to the latest version available on the [releases page](https://github.com/dathere/qsv/releases)):
 
-    ```
-    ckan config-tool /etc/ckan/default/ckan.ini "ckanext.datapusher_plus.api_token=$(ckan -c /etc/ckan/default/ckan.ini user token add CKAN_ADMIN dpplus | tail -n 1 | tr -d '\t')"
-    ```
+```bash
+wget https://github.com/dathere/qsv/releases/download/20.1.0/qsv-20.1.0-x86_64-unknown-linux-gnu.zip
+unzip qsv-20.1.0-x86_64-unknown-linux-gnu.zip
+rm qsv-20.1.0-x86_64-unknown-linux-gnu.zip
+sudo mv qsv* /usr/local/bin
+```
 
-7. DataPusher+ Database Setup
+If you get glibc errors when starting qsv, your Linux distro may not have the required version of the GNU C Library. If so, use the binaries ending with `unknown-linux-musl` instead as it they should be statically linked with the MUSL C Library.
 
-   ```
-   ckan -c /etc/ckan/default/ckan.ini db upgrade -p datapusher_plus
-   ```
+> ℹ️ **NOTE:** qsv's prebuilt binaries have the ability to self-update to the latest version. Just run qsv with the `--update` option and it will check for the latest version and update itself as required.
+> ```
+> sudo qsvdp --update
+> ```
+
+### Option 3: Install qsv from source
+
+Alternatively, if you want to install qsv from source, follow
+the instructions [here](https://github.com/dathere/qsv#installation). Note that when compiling from source,
+you may want to look into the [Performance Tuning](https://github.com/dathere/qsv#performance-tuning)
+section to squeeze even more performance from qsv.
+
+Also, if you get glibc errors when starting qsv, your Linux distro may not have the required version of the GNU C Library
+(This will be the case when running Ubuntu 18.04 or older).
+If so, use the `unknown-linux-musl.zip` archive as it is statically linked with the MUSL C Library.
+
+If you already have qsv, update it to the latest release by using the --update option.
+
+`qsvdp --update`
+
+> ℹ️ **NOTE:** qsv is a general purpose CSV data-wrangling toolkit that gets regular updates. To update to the latest version, just run
+qsv with the `--update` option and it will check for the latest version and update as required.
+
+Finally, you can build `qsvdp` from source. It has the additional benefit that the resulting binary will take advantage of all the machine's CPU features, making qsv and DP+ even faster, but may take up to 30 minutes to compile.
+
+```bash
+git clone https://github.com/dathere/qsv.git
+cd qsv
+
+# install Rust, if it's not installed
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# build qsvdp
+CARGO_BUILD_RUSTFLAGS='-C target-cpu=native' cargo build --release --locked --bin qsvdp -F datapusher_plus
+sudo cp target/release/qsvdp /usr/local/bin
+cargo clean
+```
+
+</details>
+
+6. **Make sure CKAN is running** (e.g. through `ckan -c /etc/ckan/default/ckan.ini run` after activating your virtual environment) then while CKAN is running create an API token for the DP+ Service account which **this command automatically adds the relevant config `ckanext.datapusher_plus.api_token` line to your CKAN config file `/etc/ckan/default/ckan.ini`**. **Replace `CKAN_ADMIN` in the following command with an existing CKAN user with sysadmin privileges**.
+
+```
+ckan config-tool /etc/ckan/default/ckan.ini "ckanext.datapusher_plus.api_token=$(ckan -c /etc/ckan/default/ckan.ini user token add CKAN_ADMIN dpplus | tail -n 1 | tr -d '\t')"
+```
+
+7. Add the rest of the DP+ config to your CKAN config (e.g. `/etc/ckan/default/ckan.ini`):
+
+> **Note:** The block below lists DP+'s settings at their current defaults, for reference. Set only the keys you actually want to change — pasting the whole block pins every value as an explicit override, so a later change to a DP+ default wouldn't reach you. Authoritative defaults live in [`config_declaration.yaml`](ckanext/datapusher_plus/config_declaration.yaml) and [`config.py`](ckanext/datapusher_plus/config.py).
+
+```ini
+# datapusher-plus settings
+ckanext.datapusher_plus.download_proxy = 
+ckanext.datapusher_plus.ssl_verify = true
+# supports INFO, DEBUG, TRACE - use DEBUG or TRACE when debugging scheming Formulas
+ckanext.datapusher_plus.upload_log_level = INFO
+ckanext.datapusher_plus.formats = csv tsv tab ssv xls xlsx xlsm xlsb ods geojson shp qgis zip
+ckanext.datapusher_plus.pii_screening = false
+ckanext.datapusher_plus.pii_found_abort = false
+ckanext.datapusher_plus.pii_regex_resource_id_or_alias =
+ckanext.datapusher_plus.pii_show_candidates = false
+ckanext.datapusher_plus.pii_quick_screen = false
+ckanext.datapusher_plus.qsv_bin = /usr/local/bin/qsvdp
+ckanext.datapusher_plus.preview_rows = 0
+ckanext.datapusher_plus.download_timeout = 300
+ckanext.datapusher_plus.max_content_length = 1256000000000
+ckanext.datapusher_plus.chunk_size = 16384
+ckanext.datapusher_plus.default_excel_sheet = 0
+ckanext.datapusher_plus.sort_and_dupe_check = true
+ckanext.datapusher_plus.dedup = false
+ckanext.datapusher_plus.unsafe_prefix = unsafe_
+ckanext.datapusher_plus.reserved_colnames = _id
+ckanext.datapusher_plus.prefer_dmy = false
+ckanext.datapusher_plus.ignore_file_hash = true
+ckanext.datapusher_plus.auto_index_threshold = 10
+ckanext.datapusher_plus.auto_index_dates = true
+ckanext.datapusher_plus.auto_unique_index = true
+ckanext.datapusher_plus.summary_stats_options =
+ckanext.datapusher_plus.add_summary_stats_resource = false
+ckanext.datapusher_plus.summary_stats_with_preview = false
+ckanext.datapusher_plus.qsv_stats_string_max_length = 32767
+ckanext.datapusher_plus.qsv_dates_whitelist = date,time,due,open,close,created
+ckanext.datapusher_plus.qsv_freq_limit = 10
+ckanext.datapusher_plus.auto_alias = true
+ckanext.datapusher_plus.auto_alias_unique = false
+ckanext.datapusher_plus.copy_readbuffer_size = 1048576
+ckanext.datapusher_plus.type_mapping = {"String": "text", "Integer": "numeric","Float": "numeric","DateTime": "timestamp","Date": "date","NULL": "text"}
+ckanext.datapusher_plus.auto_spatial_simplification = true
+ckanext.datapusher_plus.spatial_simplification_relative_tolerance = 0.1
+ckanext.datapusher_plus.latitude_fields = latitude,lat
+ckanext.datapusher_plus.longitude_fields = longitude,lon
+ckanext.datapusher_plus.jinja2_bytecode_cache_dir = /tmp/jinja2_bytecode_cache
+ckanext.datapusher_plus.auto_unzip_one_file = true
+```
+
+Also add this entry to your CKAN's `resource_formats.json` file for `ckanext.datapusher_plus.formats` to work as expected with `tab` files.
+
+```
+["TAB", "Tab Separated Values File", "text/tab-separated-values", []],
+```
+
+See the configuration section below for more information.
+
+8. **Optionally** add DRUF mode to your CKAN config:
+
+```ini
+# Enable DRUF (Dataset Resource Upload First) workflow for the DataPusher+ CKAN extension
+ckanext.datapusher_plus.enable_druf = true
+ckanext.datapusher_plus.enable_form_redirect = true
+```
+
+9. Set up the database for `datapusher_plus`:
+
+```bash
+ckan -c /etc/ckan/default/ckan.ini db upgrade -p datapusher_plus
+```
+
+10. If you get `Missing value` for multiple fields as a `ckan.logic.ValidationError`, temporarily you can add `validators: ignore_missing` for those fields in their YAML schema file used in [ckanext-scheming](https://github.com/ckan/ckanext-scheming) and you may also need to set `required: False`.
+11. Make sure you enable the [FileStore](https://docs.ckan.org/en/2.11/maintaining/filestore.html) for allowing file uploads (the `ckan.uploads_enabled` variable is available in your CKAN config already and you should set it to `true`). You'll also need to update FileStore storage permissions as per the docs, for example replace the Linux username `rzmk` to your username in the following commands:
+
+```bash
+sudo chown rzmk /var/lib/ckan/default
+sudo chmod -R u+rwx /var/lib/ckan/default
+```
+
+12. Make sure you enable the [Datastore](https://docs.ckan.org/en/2.11/maintaining/datastore.html) plugin.
+13. In a separate terminal, start a Prefect worker subscribed to the
+    DP+ work pool. v3.0 replaced the RQ `ckan jobs worker` with a
+    Prefect worker; see the [Worker lifecycle](#worker-lifecycle)
+    section below for the full command and lifecycle details. Quick
+    reference:
+
+```bash
+PREFECT_API_URL=http://prefect-server:4200/api \
+CKAN_INI=/etc/ckan/default/ckan.ini \
+prefect worker start --pool datapusher-plus
+```
+
+## Testing
+
+DataPusher+ has three test layers — Python unit tests, Python integration tests, and JavaScript tests. The two Python suites run automatically in CI; the JavaScript suite is run locally.
+
+### Python unit tests
+
+The unit suite (~280 tests) is fast and needs no live services, but the tests import `ckan.plugins.toolkit`, so a CKAN install and the `qsv` binary must be available on the machine running them.
+
+Install the test dependencies (`httpretty`, `pytest`, `pytest-cov`):
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+Run the suite:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+QSV_BIN=/usr/local/bin/qsvdp \
+CKAN_INI=/usr/lib/ckan/default/src/ckan/test-core.ini \
+pytest tests/ --ignore=tests/integration
+```
+
+The three environment variables:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` — CKAN ships a pytest plugin that calls `make_app()` at session start, which needs a fully-configured CKAN app. Disabling plugin autoload lets plain `pytest` run.
+- `QSV_BIN` — path to the `qsv` binary; the qsv-dependent tests (type inference, date-format and decimal-comma regression tests) shell out to it.
+- `CKAN_INI` — a CKAN test config with a real `SECRET_KEY`. Adjust the path to your CKAN source tree (CKAN's `test-core.ini`).
+
+Run with coverage. `-p pytest_cov` is required here because `PYTEST_DISABLE_PLUGIN_AUTOLOAD` turns off plugin autodiscovery — it explicitly loads the `pytest-cov` plugin:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+QSV_BIN=/usr/local/bin/qsvdp \
+CKAN_INI=/usr/lib/ckan/default/src/ckan/test-core.ini \
+pytest -p pytest_cov --cov=ckanext/datapusher_plus tests/ --ignore=tests/integration
+```
+
+### Python integration tests
+
+The integration suite exercises DataPusher+ end-to-end against a real CKAN + Prefect + PostgreSQL + Solr + Redis stack, managed with Docker Compose.
+
+Bring the stack up (this also writes a sysadmin token to `.integration-token`):
+
+```bash
+scripts/integration-up
+```
+
+Run the integration tests:
+
+```bash
+INTEGRATION=1 CKAN_URL=http://localhost:5050 pytest tests/integration/ -v
+```
+
+Tear the stack down — `scripts/integration-down` keeps the PostgreSQL volume for a fast warm restart, `scripts/integration-down --wipe` removes everything:
+
+```bash
+scripts/integration-down
+```
+
+A plain `pytest tests/` run skips `tests/integration/` automatically unless `INTEGRATION=1` is set, so the unit and integration suites don't collide.
+
+See [`tests/integration/README.md`](tests/integration/README.md) for the full stack layout, configurable ports, and token handling.
+
+### JavaScript tests
+
+The JavaScript suite uses [Vitest](https://vitest.dev/) with jsdom and covers the `scheming-ai-suggestions.js` CKAN module.
+
+```bash
+npm install        # first time only
+npm test           # one-shot run
+npm run test:watch # watch mode
+```
+
+See [`tests/js/README.md`](tests/js/README.md) for setup details.
+
+### Continuous integration
+
+- [`.github/workflows/test.yml`](.github/workflows/test.yml) ("Unit Tests") runs the Python unit suite on every push to `main`/`dev` and every pull request to `main`.
+- [`.github/workflows/ci.yml`](.github/workflows/ci.yml) ("DataPusher+ Integration CI") runs the qsv contract-regression test and the full integration suite on every push to `main`/`dev`, every pull request to `main`, and nightly.
 
 ## Configuring
 
@@ -336,22 +490,23 @@ Use a DP+ extended scheming schema:
 scheming.dataset_schemas =  ckanext.datapusher_plus:dataset-druf.yaml
 ```
 
-Configure DP+ numerous settings. See [config.py](ckanext/datapusher_plus/config.py) for details.
+Configure DP+ numerous settings. See [config.py](ckanext/datapusher_plus/config.py) and [`config_declaration.yaml`](ckanext/datapusher_plus/config_declaration.yaml) for details.
+
+> **Note:** The block below lists DP+'s settings at their current defaults, for reference. Set only the keys you actually want to change — pasting the whole block pins every value as an explicit override, so a later change to a DP+ default wouldn't reach you. Authoritative defaults live in [`config_declaration.yaml`](ckanext/datapusher_plus/config_declaration.yaml) and [`config.py`](ckanext/datapusher_plus/config.py).
 
 >```ini
-> ckanext.datapusher_plus.use_proxy = false
 > ckanext.datapusher_plus.download_proxy = 
-> ckanext.datapusher_plus.ssl_verify = false
+> ckanext.datapusher_plus.ssl_verify = true
 > # supports INFO, DEBUG, TRACE - use DEBUG or TRACE when debugging scheming Formulas
 > ckanext.datapusher_plus.upload_log_level = INFO
-> ckanext.datapusher_plus.formats = csv tsv tab ssv xls xlsx xlsxb xlsm ods geojson shp qgis zip
+> ckanext.datapusher_plus.formats = csv tsv tab ssv xls xlsx xlsm xlsb ods geojson shp qgis zip
 > ckanext.datapusher_plus.pii_screening = false
 > ckanext.datapusher_plus.pii_found_abort = false
 > ckanext.datapusher_plus.pii_regex_resource_id_or_alias =
 > ckanext.datapusher_plus.pii_show_candidates = false
 > ckanext.datapusher_plus.pii_quick_screen = false
 > ckanext.datapusher_plus.qsv_bin = /usr/local/bin/qsvdp
-> ckanext.datapusher_plus.preview_rows = 100
+> ckanext.datapusher_plus.preview_rows = 0
 > ckanext.datapusher_plus.download_timeout = 300
 > ckanext.datapusher_plus.max_content_length = 1256000000000
 > ckanext.datapusher_plus.chunk_size = 16384
@@ -362,7 +517,7 @@ Configure DP+ numerous settings. See [config.py](ckanext/datapusher_plus/config.
 > ckanext.datapusher_plus.reserved_colnames = _id
 > ckanext.datapusher_plus.prefer_dmy = false
 > ckanext.datapusher_plus.ignore_file_hash = true
-> ckanext.datapusher_plus.auto_index_threshold = 3
+> ckanext.datapusher_plus.auto_index_threshold = 10
 > ckanext.datapusher_plus.auto_index_dates = true
 > ckanext.datapusher_plus.auto_unique_index = true
 > ckanext.datapusher_plus.summary_stats_options =
@@ -375,14 +530,13 @@ Configure DP+ numerous settings. See [config.py](ckanext/datapusher_plus/config.
 > ckanext.datapusher_plus.auto_alias_unique = false
 > ckanext.datapusher_plus.copy_readbuffer_size = 1048576
 > ckanext.datapusher_plus.type_mapping = {"String": "text", "Integer": "numeric","Float": "numeric","DateTime": "timestamp","Date": "date","NULL": "text"}
-> ckanext.datapusher_plus.auto_spatial_simplication = true
-> ckanext.datapusher_plus.spatial_simplication_relative_tolerance = 0.1
+> ckanext.datapusher_plus.auto_spatial_simplification = true
+> ckanext.datapusher_plus.spatial_simplification_relative_tolerance = 0.1
 > ckanext.datapusher_plus.latitude_fields = latitude,lat
-> ckanext.datapusher_plus.longitude_fields = longitude,long,lon
-> ckanext.datapusher_plus.jinja2_bytecode_cache_dir = /tmp/jinja2_butecode_cache
+> ckanext.datapusher_plus.longitude_fields = longitude,lon
+> ckanext.datapusher_plus.jinja2_bytecode_cache_dir = /tmp/jinja2_bytecode_cache
 > ckanext.datapusher_plus.auto_unzip_one_file = true
 > ckanext.datapusher_plus.api_token = <CKAN service account token for CKAN user with sysadmin privileges>
->ckanext.datapusher_plus.describeGPT_api_key = <Token for OpenAI API compatible service>
 >```
 >
 >and add this entry to your CKAN's `resource_formats.json` file.
@@ -405,14 +559,221 @@ You can also manually trigger resources to be resubmitted. When editing a resour
 Run the following command to submit all resources to datapusher, although it will skip files whose hash of the data file has not changed:
 
 ``` bash
-    ckan -c /etc/ckan/default/ckan.ini datapusher_plus resubmit
+ckan -c /etc/ckan/default/ckan.ini datapusher_plus resubmit
 ```
 
 To Resubmit a specific resource, whether or not the hash of the data file has changed:
 
 ``` bash
-    ckan -c /etc/ckan/default/ckan.ini datapusher_plus submit {dataset_id}
+ckan -c /etc/ckan/default/ckan.ini datapusher_plus submit {dataset_id}
 ```
+
+## Prefect orchestration (v3.0+)
+
+DataPusher+ v3.0 replaces the v2 RQ-based background worker with a [Prefect 3](https://docs.prefect.io/v3/) flow. RQ is no longer used by DP+ itself (CKAN continues to ship RQ for unrelated extensions).
+
+### Why Prefect
+
+* **Customizable workflows** — operators compose their own ingestion flows from DP+'s `@task` primitives without forking the code.
+* **Graceful failure & recoverable ingestion** — per-task retries with exponential backoff, transactional rollback of partial datastore writes, result persistence so the Prefect UI's "Re-run from failed task" replays only the failed and downstream tasks, content-based caching that skips re-downloading unchanged resources.
+* **Observability** — every flow run, every task, every retry, every log line is visible in the Prefect UI. Each successful run attaches a Markdown "Data Quality Report" artifact and emits a `datapusher.resource.ingested` event that operators can wire into Automations (Slack, PagerDuty, search reindex, DCAT refresh) without DP+ hard-coding a specific alerting backend.
+* **Horizontal scaling** — add Prefect workers on additional hosts to scale ingestion throughput. Tag-based concurrency limits cap concurrent Postgres COPY operations so a burst of submissions doesn't flatten the datastore.
+
+### Topology
+
+```
++--------+      submit_flow_run      +----------------+      poll        +-----------------+
+|  CKAN  | ------------------------> | Prefect server | <--------------- | Prefect worker  |
++--------+      datapusher_hook      |  (UI on 4200)  |     flow runs    | (runs the flow) |
+    ^             POST callback      +----------------+                  +-----------------+
+    |                                        |
+    +----------------------------------------+
+                       Postgres (shared)
+```
+
+The CKAN web request handler synchronously POSTs the run to the Prefect server and returns immediately with a `flow_run_id`. A separately-managed worker process executes the flow. Prefect 3's default Postgres-backed server is sufficient — no Redis required.
+
+### Quick start (dev / demo)
+
+```bash
+# 1. Bring up Prefect server + worker + Postgres
+docker compose -f docker-compose.prefect.yaml up -d
+
+# 2. Register the DataPusher+ deployment with the Prefect server
+ckan -c /etc/ckan/default/ckan.ini datapusher_plus prefect-deploy
+
+# 3. Submit a resource via the CKAN UI — you should now see the flow
+#    run in the Prefect UI at http://localhost:4200
+```
+
+For production, run your own Prefect server (or use Prefect Cloud) and configure `PREFECT_API_URL` to point at it.
+
+### Worker lifecycle
+
+The CKAN-side RQ worker (`ckan jobs worker`) is no longer used for DP+ jobs. Replace it with:
+
+```bash
+PREFECT_API_URL=http://prefect-server:4200/api \
+CKAN_INI=/etc/ckan/default/ckan.ini \
+prefect worker start --pool datapusher-plus
+```
+
+Scale horizontally by starting workers on additional hosts pointed at the same Prefect server and work pool. Workers must have the `datapusher-plus` Python package installed and CKAN configuration accessible (it's read at flow-run start for resource metadata and the qsv binary path).
+
+### Upgrading from v2.0
+
+A one-shot CLI helper handles the cutover:
+
+```bash
+ckan -c /etc/ckan/default/ckan.ini datapusher_plus migrate-from-rq --resubmit
+```
+
+What it does:
+
+1. Drains any pending DP+ jobs from CKAN's RQ queue.
+2. Resets any `pending` task_status rows on the CKAN side so the UI no longer falsely shows in-flight ingestions.
+3. Verifies the configured Prefect server is reachable.
+4. With `--resubmit`, re-submits each affected resource_id through the new Prefect path.
+
+After it finishes: stop your CKAN-side `ckan jobs worker` process (or leave it if other extensions use RQ — DP+ jobs no longer flow through it), then start `prefect worker start -p datapusher-plus`.
+
+Historical `Jobs`/`Logs` rows from the RQ era remain queryable through `datapusher_status` and the CKAN UI without modification — the v2 database schema needs no migration.
+
+### Observability features
+
+Each successful flow run attaches:
+
+* A **Data Quality Markdown artifact** — row count, inferred schema, PII findings, quarantine count.
+* A **CKAN resource link artifact** — one-click jump back to the resource page in CKAN.
+* A **`datapusher.resource.ingested` custom event** with payload `{rows, file_hash, duration_seconds}` — wire this into Prefect Automations for downstream side effects.
+
+The validation and PII tasks emit additional events (`datapusher.row.quarantined`, `datapusher.pii.detected`).
+
+Two example automations ship in `examples/automations/`:
+
+```bash
+# Alert on 3 consecutive failures for the same resource within an hour
+prefect automation create -f examples/automations/alert-on-consecutive-failures.json
+
+# Alert on Crashed state (worker killed, OOM, infrastructure error)
+prefect automation create -f examples/automations/alert-on-crashed.json
+```
+
+Replace `REPLACE_WITH_NOTIFICATION_BLOCK_ID` in those files with the ID of a notification Block (Slack, PagerDuty, email) you've registered in the Prefect UI before applying.
+
+### Custom flows
+
+Operators compose their own ingestion flow by importing DP+'s `@task` primitives and registering the flow via config:
+
+```python
+# my_plugin/flows.py
+from prefect import flow
+
+from ckanext.datapusher_plus.jobs.prefect_flow import (
+    download_task, format_convert_task, validate_task, analyze_task,
+    database_task, indexing_task, formula_task, metadata_task,
+)
+from prefect.transactions import transaction
+
+
+@flow(name="my-custom-datapusher")
+def my_custom_flow(job_input):
+    dl = download_task(job_input)
+    cv = format_convert_task(dl)
+
+    # ... insert your own redaction / enrichment / spatial tasks here ...
+    vl = validate_task(cv)
+    an = analyze_task(vl)
+    with transaction():
+        db = database_task(an)
+        idx = indexing_task(db)
+        fm = formula_task(idx)
+        md = metadata_task(fm)
+```
+
+Then point DP+ at it in `ckan.ini`:
+
+```ini
+ckanext.datapusher_plus.prefect_flow = my_plugin.flows:my_custom_flow
+```
+
+…and re-run `ckan datapusher_plus prefect-deploy`. Submissions via the CKAN UI now invoke your flow. The existing `IDataPusher.can_upload` / `after_upload` plugin hooks continue to fire — custom flows are additive, not exclusive.
+
+#### Per-domain subflows
+
+DP+ ships two **subflow primitives** in `ckanext.datapusher_plus.jobs.subflows` for custom flow authors who want per-domain work to appear as its own Prefect-UI run row (with its own retries, concurrency limits, and logs):
+
+| Subflow | Wraps | Use when… |
+|---|---|---|
+| `pii_screening_subflow(csv_path, resource, temp_dir)` | `screen_for_pii` | You want PII screening to retry / observe independently of analysis, or you're A/B-testing a custom screening implementation. |
+| `spatial_processing_subflow(input_path, resource_format, output_csv_path=None, tolerance=0.001)` | `process_spatial_file` | You want spatial conversion (Shapefile/GeoJSON → CSV) to retry / observe independently of the broader format-conversion task. |
+
+Both return a JSON-encodable dict (`{"pii_found": …, "pii_candidate_count": …}` and `{"success": …, "error_message": …, "bounds": …}`) so Prefect's result-serialization works without extra schema setup.
+
+Example — replacing the inline PII call inside a custom analyze task:
+
+```python
+from prefect import task
+from ckanext.datapusher_plus.jobs.subflows import pii_screening_subflow
+
+@task
+def my_analyze_task(prev):
+    ctx = ...  # build / rehydrate the runtime context
+    # ... your stats / type-inference work ...
+    pii = pii_screening_subflow(
+        csv_path=ctx.tmp, resource=ctx.resource, temp_dir=ctx.temp_dir,
+    )
+    if pii["pii_found"]:
+        ...  # gate / suspend / route as you like
+```
+
+The **default** DP+ flow does NOT call these subflows — it inlines the underlying helpers inside its existing task bodies to avoid restructuring the working pipeline. The subflows are entry points for custom-flow authors who want the independent-observability win.
+
+### Configuration reference (new in v3.0)
+
+| Key | Default | Purpose |
+|---|---|---|
+| `ckanext.datapusher_plus.prefect_deployment_name` | `datapusher-plus/datapusher-plus` | Fully-qualified Prefect deployment name (`<flow>/<deployment>`). |
+| `ckanext.datapusher_plus.prefect_work_pool` | `datapusher-plus` | Work-pool name workers subscribe to. |
+| `ckanext.datapusher_plus.prefect_flow` | _(unset)_ | `module.path:flow_name` entrypoint of a custom flow. |
+| `ckanext.datapusher_plus.prefect_ui_base` | _(unset)_ | Base URL of the Prefect UI (e.g. `http://prefect-server:4200`) — when set, `datapusher_status` returns a `job_url` that deep-links into the run page. |
+| `ckanext.datapusher_plus.flow_timeout` | `7200` | Outer flow-run timeout in seconds. Replaces v2's `ckan.datapusher.timeout`. |
+| `ckanext.datapusher_plus.max_quarantine_pct` | `5.0` | Maximum percentage of rows that may be quarantined before the flow fails. |
+| `ckanext.datapusher_plus.pii_review_threshold` | `0` | When `> 0` and PII screening detects this many sensitive fields, the flow suspends for human approval via the Prefect UI. |
+| `ckanext.datapusher_plus.result_storage_block` | `local-file-system/datapusher-plus-results` | Prefect Block for task-result persistence. Swap to S3/GCS for multi-host worker pools. |
+| `ckanext.datapusher_plus.use_truncate_freeze` | `true` | When `true`, run `TRUNCATE` + `COPY ... WITH FREEZE` in one transaction (faster ingestion via FREEZE, but holds `AccessExclusive` lock for the full COPY). Set to `false` on read-heavy datastores to release the lock between TRUNCATE and COPY — concurrent `SELECT`s keep working at the cost of losing the FREEZE speedup. |
+
+Worker-process env-var fallbacks (read when CKAN config isn't loaded in the worker):
+
+* `DATAPUSHER_PLUS_FLOW_TIMEOUT_SECONDS`
+* `DATAPUSHER_PLUS_DOWNLOAD_RETRIES`
+* `DATAPUSHER_PLUS_DATABASE_RETRIES`
+* `DATAPUSHER_PLUS_CACHE_TTL_HOURS` (default 24)
+* `DATAPUSHER_PLUS_MAX_PERSIST_FILE_MB` (default 512; `0` disables the cap)
+* `DATAPUSHER_PLUS_MAX_QUARANTINE_PCT`
+* `DATAPUSHER_PLUS_RESULT_STORAGE_BLOCK`
+
+**Prefect Variables (optional, highest priority):** the flow looks up these
+Variable names at run start and uses the value when set. Set / change them
+from the Prefect UI (Variables tab) or `prefect variable set NAME VALUE`;
+takes effect on the next flow run without a worker restart.
+
+| Variable | Overrides |
+|---|---|
+| `dpp_flow_timeout` | `ckanext.datapusher_plus.flow_timeout` / `DATAPUSHER_PLUS_FLOW_TIMEOUT_SECONDS` |
+| `dpp_download_retries` | `ckanext.datapusher_plus.download_retries` / `DATAPUSHER_PLUS_DOWNLOAD_RETRIES` |
+
+Resolution order: Prefect Variable -> env var -> `ckan.ini` -> built-in default. Variable lookup failures (Prefect server unreachable, name absent, value not int-parseable) silently fall through to the next priority — operators with no Prefect Variables set see no behaviour change.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `datapusher_submit` returns `False` with a Prefect connection error in the CKAN log | The Prefect server is unreachable from CKAN | Check `PREFECT_API_URL` and that the Prefect server is healthy at `<API>/health`. |
+| Flow run sits in `Scheduled` forever | No worker is polling the configured work pool | Start `prefect worker start -p datapusher-plus` on a host with the `datapusher-plus` package installed. |
+| Flow run goes straight to `Failed` with "QSV binary not found" | The worker process can't see the qsv binary | Set `ckanext.datapusher_plus.qsv_bin` in the CKAN config the worker reads, or install qsv in the worker's PATH. |
+| Re-run from a failed task re-downloads the file | Result storage block isn't registered, so persisted results aren't being read | Re-run `ckan datapusher_plus prefect-deploy` — it calls `ensure_result_storage_block`. |
+| Pre-existing partial table after a failed run | Database `on_rollback` couldn't drop it (e.g., Postgres unreachable at rollback time) | Drop manually with `datastore_delete`; the next submit recreates from scratch. |
 
 ## License
 

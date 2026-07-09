@@ -9,7 +9,8 @@ from datetime import datetime
 from collections import Counter
 from typing import Any, Dict, Optional
 
-from jinja2 import DictLoader, Environment, FileSystemBytecodeCache, pass_context
+from jinja2 import DictLoader, FileSystemBytecodeCache, pass_context
+from jinja2.sandbox import SandboxedEnvironment
 
 import ckanext.datapusher_plus.config as conf
 import ckanext.datapusher_plus.datastore_utils as dsu
@@ -24,22 +25,83 @@ JINJA2_GLOBALS = []
 USES_SQL = []
 
 
+def _register_unique(registry: list, func):
+    """Register ``func`` in ``registry``, replacing any existing entry that
+    shares the same qualname.
+
+    The decorators below run at import time; a naive ``append`` would
+    accumulate duplicates on module reload (test isolation, hot reload, etc.)
+    and bloat the Jinja env. Skipping on qualname-collision avoids duplicates
+    but pins the registry to the *old* function object, so fixes in the
+    reloaded module would silently never take effect. Replacing the existing
+    entry instead gives idempotent behaviour AND honours reloads.
+    """
+    qualname = getattr(func, "__qualname__", func.__name__)
+    for i, existing in enumerate(registry):
+        if getattr(existing, "__qualname__", existing.__name__) == qualname:
+            registry[i] = func
+            return
+    registry.append(func)
+
+
 def jinja2_filter(func):
     """Decorator to register a function as a Jinja2 filter."""
-    JINJA2_FILTERS.append(func)
+    _register_unique(JINJA2_FILTERS, func)
     return func
 
 
 def jinja2_global(func):
     """Decorator to register a function as a Jinja2 global."""
-    JINJA2_GLOBALS.append(func)
+    _register_unique(JINJA2_GLOBALS, func)
     return func
 
 
 def uses_sql(func):
     """Decorator to register a function as using SQL."""
-    USES_SQL.append(func)
+    _register_unique(USES_SQL, func)
     return func
+
+
+def detect_lat_lon_fields(resource_fields_stats):
+    """Return ``(lat_field, lon_field)`` for a stats dict, or ``(None, None)``.
+
+    A field is treated as a latitude / longitude candidate when its qsv
+    ``stats.type`` is ``Float`` and its ``min``/``max`` fall within the
+    valid WGS84 range ([-90,90] for latitude, [-180,180] for longitude).
+    The candidate set comes from ``conf.LATITUDE_FIELDS`` /
+    ``conf.LONGITUDE_FIELDS`` (comma-separated, case-insensitive); the
+    first matching column wins. Either return value can be ``None`` if
+    no candidate matched.
+
+    Extracted from ``FormulaProcessor.__init__`` so non-formula stages
+    (currently ``MetadataStage``, which persists ``dpp_spatial_extent``
+    for CSVs with lat/lon columns) can run the same detection without
+    constructing a full ``FormulaProcessor``.
+    """
+    latitude_fields = [f.strip() for f in conf.LATITUDE_FIELDS.split(",")]
+    longitude_fields = [f.strip() for f in conf.LONGITUDE_FIELDS.split(",")]
+
+    def _match(candidates, min_bound, max_bound):
+        lowered = {k.lower(): k for k in resource_fields_stats.keys()}
+        for field in candidates:
+            orig = lowered.get(field.lower())
+            if orig is None:
+                continue
+            stats = resource_fields_stats.get(orig, {}).get("stats", {})
+            if stats.get("type") != "Float":
+                continue
+            try:
+                lo = float(stats["min"])
+                hi = float(stats["max"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if lo >= min_bound and hi <= max_bound:
+                return orig
+        return None
+
+    lat_field = _match(latitude_fields, -90.0, 90.0)
+    lon_field = _match(longitude_fields, -180.0, 180.0)
+    return lat_field, lon_field
 
 
 class FormulaProcessor:
@@ -55,59 +117,14 @@ class FormulaProcessor:
     ):
 
         # FIRST, INFER LATITUDE AND LONGITUDE COLUMN NAMES
-        # fetch LATITUDE_FIELDS and LONGITUDE_FIELDS from config
-        latitude_fields = [field.strip() for field in conf.LATITUDE_FIELDS.split(",")]
-        longitude_fields = [field.strip() for field in conf.LONGITUDE_FIELDS.split(",")]
-
-        logger.trace(f"Latitude Fields: {latitude_fields}")
-        logger.trace(f"Longitude Fields: {longitude_fields}")
+        logger.trace(f"Latitude Fields: {conf.LATITUDE_FIELDS}")
+        logger.trace(f"Longitude Fields: {conf.LONGITUDE_FIELDS}")
 
         dpp = {}
-        # then, check if any of the fields are present in the resource_fields_stats
-        # case-insensitive and is a float and whose values are between -90.0 and 90.0
-        # if found, set the dpp["LAT_FIELD"] to the field name
-        dpp["LAT_FIELD"] = None
-        for field in latitude_fields:
-            field = field.lower()
-            if field in [k.lower() for k in resource_fields_stats.keys()]:
-                # Get the original case field name by finding the matching key ignoring case
-                orig_field = next(
-                    k for k in resource_fields_stats.keys() if k.lower() == field
-                )
-                if (
-                    resource_fields_stats[orig_field]["stats"]["type"] == "Float"
-                    and float(resource_fields_stats[orig_field]["stats"]["min"])
-                    >= -90.0
-                    and float(resource_fields_stats[orig_field]["stats"]["max"]) <= 90.0
-                ):
-                    dpp["LAT_FIELD"] = orig_field
-                    break
-
-        # if found, set the dpp["LON_FIELD"] to the field name
-        dpp["LON_FIELD"] = None
-        for field in longitude_fields:
-            field = field.lower()
-            if field in [k.lower() for k in resource_fields_stats.keys()]:
-                # Get the original case field name by finding the matching key ignoring case
-                orig_field = next(
-                    k for k in resource_fields_stats.keys() if k.lower() == field
-                )
-                if (
-                    resource_fields_stats[orig_field]["stats"]["type"] == "Float"
-                    and float(resource_fields_stats[orig_field]["stats"]["min"])
-                    >= -180.0
-                    and float(resource_fields_stats[orig_field]["stats"]["max"])
-                    <= 180.0
-                ):
-                    dpp["LON_FIELD"] = orig_field
-                    break
-
-        # if no latitude nor longitude fields are found,
-        # set dpp["NO_LAT_LON_FIELDS"] to True
-        if dpp["LAT_FIELD"] is None or dpp["LON_FIELD"] is None:
-            dpp["NO_LAT_LON_FIELDS"] = True
-        else:
-            dpp["NO_LAT_LON_FIELDS"] = False
+        lat_field, lon_field = detect_lat_lon_fields(resource_fields_stats)
+        dpp["LAT_FIELD"] = lat_field
+        dpp["LON_FIELD"] = lon_field
+        dpp["NO_LAT_LON_FIELDS"] = lat_field is None or lon_field is None
 
         # now, check if any date fields are present in the resource_fields_stats
         # if found, set the dpp["DATE_FIELDS"] to the field name
@@ -194,6 +211,36 @@ class FormulaProcessor:
             try:
                 formula = jinja2_env.get_template(field_name)
                 rendered_formula = formula.render(**context)
+                
+                # Coerce Jinja2's stringified empty/none outputs back to
+                # actual Python ``None`` so ``dpp_suggestions`` JSON serializes
+                # ``null`` and the frontend can grey out the suggestion button
+                # (issue #261). We ``.strip()`` first so whitespace-only renders
+                # (the ``" "`` / ``"\n"`` output of ``{% if %}`` blocks missing
+                # ``-`` trim markers) are caught too — roborev #2289 LOW.
+                #
+                # Gated on ``formula_type == "suggestion_formula"`` because
+                # this method also handles direct ``formula`` updates (see
+                # ``jobs/stages/formula.py:290,321``) that write straight into
+                # the package/resource dict. Coercing ``""`` → ``None`` on
+                # those would change patch semantics for fields where the
+                # CKAN validator treats empty string and null differently
+                # (caught by Copilot review on PR #322).
+                #
+                # KNOWN LIMITATION for the suggestion path: a formula that
+                # legitimately renders the literal string ``"None"`` (e.g. a
+                # license field) will also coerce to ``None``. Deliberate —
+                # ``scheming-suggestions.js`` relies on ``null`` (not
+                # ``"None"``) to distinguish "no suggestion" from a real
+                # value. Scheming YAMLs that need to emit the literal text
+                # "None" should pick a different label (``"none"`` lowercase,
+                # ``"N/A"``, etc.).
+                if (
+                    formula_type == "suggestion_formula"
+                    and rendered_formula.strip() in ("", "None")
+                ):
+                    rendered_formula = None
+
                 updates[field_name] = rendered_formula
 
                 self.logger.debug(
@@ -206,8 +253,14 @@ class FormulaProcessor:
 
         return updates
 
-    def create_jinja2_env(self, context: Dict[str, Any]) -> Environment:
-        """Create a configured Jinja2 environment with all filters and globals."""
+    def create_jinja2_env(self, context: Dict[str, Any]) -> SandboxedEnvironment:
+        """Create a configured Jinja2 environment with all filters and globals.
+
+        Uses ``SandboxedEnvironment`` because formula templates originate from
+        scheming YAML authored by sysadmins/schema editors. Without the sandbox,
+        a template like ``{{ ''.__class__.__mro__[1].__subclasses__() }}`` can
+        escape to ``subprocess``, the filesystem, etc. — i.e. RCE on the worker.
+        """
 
         # We use a bytecode cache to speed up the rendering of the Formulas
         # we do not use temp_dir defined in jobs.py because we want the cache
@@ -216,7 +269,9 @@ class FormulaProcessor:
         os.makedirs(cache_dir, exist_ok=True)
         bytecode_cache = FileSystemBytecodeCache(cache_dir)
 
-        env = Environment(loader=DictLoader(context), bytecode_cache=bytecode_cache)
+        env = SandboxedEnvironment(
+            loader=DictLoader(context), bytecode_cache=bytecode_cache
+        )
 
         datastore_sqlsearch_enabled = tk.config.get(
             "ckan.datastore.sqlsearch.enabled", False
@@ -525,8 +580,24 @@ def spatial_extent_feature_collection(
         else:
             bbox = [float(coord) for coord in bbox]
     else:
-        if context.get("resource").get("dpp_spatial_extent"):
-            bbox = context.get("resource").get("dpp_spatial_extent").get("coordinates")
+        extent = context.get("resource").get("dpp_spatial_extent")
+        if extent:
+            # ``dpp_spatial_extent`` is persisted as a GeoJSON-ish
+            # BoundingBox: ``{"type": "BoundingBox", "coordinates":
+            # [[min_lon, min_lat], [max_lon, max_lat]]}``. Flatten to
+            # the [min_lon, min_lat, max_lon, max_lat] order this
+            # function's format-string expects. Same shape that
+            # ``spatial_extent_wkt`` consumes.
+            if extent.get("type") == "BoundingBox":
+                coords = extent.get("coordinates")
+                bbox = [
+                    float(coords[0][0]),
+                    float(coords[0][1]),
+                    float(coords[1][0]),
+                    float(coords[1][1]),
+                ]
+            else:
+                raise ValueError("Spatial extent is not a BoundingBox")
         else:
             if context.get("dpp").get("NO_LAT_LON_FIELDS"):
                 raise ValueError("No latitude or longitude fields found")

@@ -316,9 +316,30 @@ class FormatConverterStage(BaseStage):
         else:
             source_file = context.tmp
 
+        # Sniff the delimiter so non-comma CSVs (semicolon-, tab-, or
+        # pipe-delimited) normalize correctly. ``qsv input`` assumes a
+        # comma delimiter, which silently mis-parses — or outright
+        # rejects — files using another delimiter. Comma files and files
+        # qsv cannot sniff fall through unchanged (delimiter=None).
+        input_delimiter = None
+        sniffed = context.qsv.sniff(source_file)
+        if sniffed:
+            detected = sniffed.get("delimiter_char")
+            if detected in (";", "\t", "|"):
+                input_delimiter = detected
+                shown = "tab" if detected == "\t" else detected
+                context.logger.info(
+                    f"Detected '{shown}' delimiter; normalizing to comma-delimited CSV"
+                )
+
         # Normalize using qsv input
         try:
-            context.qsv.input(source_file, trim_headers=True, output_file=qsv_input_csv)
+            context.qsv.input(
+                source_file,
+                trim_headers=True,
+                output_file=qsv_input_csv,
+                delimiter=input_delimiter,
+            )
         except utils.JobError as e:
             raise utils.JobError(
                 f"Job aborted as the file cannot be normalized/transcoded: {e}."
@@ -367,15 +388,29 @@ class FormatConverterStage(BaseStage):
         Raises:
             utils.JobError: If re-encoding fails
         """
+        # Timeout matches qsv's so a hung iconv (e.g. a misnamed encoding that
+        # iconv stalls on) doesn't pin the worker.
         try:
             cmd = subprocess.run(
                 ["iconv", "-f", from_encoding, "-t", "UTF-8", context.tmp],
                 capture_output=True,
                 check=True,
+                timeout=conf.QSV_COMMAND_TIMEOUT,
             )
+            # check=True guarantees non-zero exits raise; we still sanity-check
+            # output before overwriting the destination file.
+            if not cmd.stdout:
+                raise utils.JobError(
+                    "iconv produced empty output while re-encoding to UTF-8"
+                )
             with open(output_file, "wb") as f:
                 f.write(cmd.stdout)
             context.logger.info("Successfully re-encoded to UTF-8")
+        except subprocess.TimeoutExpired:
+            raise utils.JobError(
+                f"iconv timed out after {conf.QSV_COMMAND_TIMEOUT}s while "
+                f"re-encoding from {from_encoding} to UTF-8"
+            )
         except subprocess.CalledProcessError as e:
             raise utils.JobError(
                 f"Job aborted as the file cannot be re-encoded to UTF-8. {e.stderr}"
