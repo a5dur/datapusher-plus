@@ -853,3 +853,54 @@ def test_has_ai_fields_handles_bad_input(has_ai_fields):
     assert has_ai_fields(None) is False
     assert has_ai_fields("not a schema") is False
     assert has_ai_fields({}) is False
+
+
+# ---------------------------------------------------------------------------
+# AISuggestionsStage._run_describegpt — base_url promotion
+# ---------------------------------------------------------------------------
+
+
+def test_run_describegpt_promotes_env_base_url(stage_cls, context_factory):
+    """qsvdp ignores the ``QSV_LLM_BASE_URL`` env var, so the stage must
+    promote it to an explicit ``base_url=`` (-> ``--base-url`` flag) when
+    no prompt-file drives the endpoint."""
+    from ckanext.datapusher_plus.jobs.stages import ai_suggestions as ai_mod
+
+    fake_qsv = mock.Mock()
+    fake_qsv.describegpt.return_value = _completed("{}")
+    ctx = context_factory()
+    ctx.qsv = fake_qsv
+
+    with mock.patch.object(ai_mod.conf, "DESCRIBEGPT_CONFIG_PATH", ""), \
+         mock.patch.dict(
+             ai_mod.os.environ,
+             {"QSV_LLM_BASE_URL": "https://openrouter.ai/api/v1"},
+         ):
+        stage_cls()._run_describegpt(ctx)
+
+    assert (
+        fake_qsv.describegpt.call_args.kwargs["base_url"]
+        == "https://openrouter.ai/api/v1"
+    )
+
+
+def test_run_describegpt_prompt_file_wins_over_env_base_url(stage_cls, context_factory):
+    """A prompt-file already defines base_url; the env var must NOT
+    override it (qsv precedence: flag > env > prompt-file)."""
+    from ckanext.datapusher_plus.jobs.stages import ai_suggestions as ai_mod
+
+    fake_qsv = mock.Mock()
+    fake_qsv.describegpt.return_value = _completed("{}")
+    ctx = context_factory()
+    ctx.qsv = fake_qsv
+
+    with mock.patch.object(
+             ai_mod.conf, "DESCRIBEGPT_CONFIG_PATH", "/etc/qsv/describegpt.toml"
+         ), \
+         mock.patch.dict(
+             ai_mod.os.environ,
+             {"QSV_LLM_BASE_URL": "https://openrouter.ai/api/v1"},
+         ):
+        stage_cls()._run_describegpt(ctx)
+
+    assert fake_qsv.describegpt.call_args.kwargs["base_url"] is None
