@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any, Dict, Optional
 
@@ -161,6 +162,14 @@ class AISuggestionsStage(BaseStage):
         timeout) so the caller's outer try/except can log + skip.
         """
         prompt_file = conf.DESCRIBEGPT_CONFIG_PATH or None
+        # qsvdp does NOT honor the ``QSV_LLM_BASE_URL`` env var (verified
+        # against qsvdp 20.1.0: it silently falls back to the localhost
+        # default), even though ``--help`` documents the env fallback.
+        # ``--api-key`` / ``--model`` env vars ARE read, so only the base
+        # URL needs promoting to an explicit ``--base-url`` flag. Skip when
+        # a prompt-file is set — that already defines base_url and the flag
+        # would override it (qsv precedence: flag > env > prompt-file).
+        base_url = None if prompt_file else (os.environ.get("QSV_LLM_BASE_URL") or None)
         # ``_build_runtime_context`` constructs a ``QSVCommand`` once per
         # flow run and stashes it on the context — reuse that so we
         # don't pay the binary-existence + ``check_version`` cost twice.
@@ -170,6 +179,7 @@ class AISuggestionsStage(BaseStage):
         context.logger.info(
             f"Running qsv describegpt against {context.tmp} "
             f"(prompt_file={prompt_file or '<qsv default>'}, "
+            f"base_url={base_url or '<qsv default>'}, "
             f"timeout={conf.DESCRIBEGPT_TIMEOUT_SECONDS}s)"
         )
         result = qsv.describegpt(
@@ -179,6 +189,7 @@ class AISuggestionsStage(BaseStage):
             dictionary=True,
             tags=True,
             json_output=True,
+            base_url=base_url,
         )
         stdout = (result.stdout or "").strip()
         if not stdout:
