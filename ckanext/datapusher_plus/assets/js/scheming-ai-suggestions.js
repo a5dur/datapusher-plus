@@ -24,6 +24,12 @@ ckan.module('scheming-ai-suggestions', function($) {
 
       var el = this.el;
       var fieldName = $(el).data('field-name');
+      // ``data-ai-key`` is the key into the ai_suggestions map, which may
+      // differ from the field name (e.g. the ``tag_string`` field consumes
+      // the ``tags`` suggestion). The field name still drives the DOM
+      // target (``#field-<fieldName>``); the ai-key drives the lookup/match.
+      // Defaults to the field name so ordinary fields are unaffected.
+      var aiKey = $(el).data('ai-key') || fieldName;
 
       // Bail out for elements without a data-field-name. This module
       // only knows how to drive per-field AI buttons; a dataset-level
@@ -81,7 +87,7 @@ ckan.module('scheming-ai-suggestions', function($) {
         $('.ai-suggestion-popover').hide();
         
         // Get suggestion from global state (updated by polling)
-        var suggestion = globalState.aiSuggestions[fieldName];
+        var suggestion = globalState.aiSuggestions[aiKey];
         var suggestionValue = suggestion ? suggestion.value : '';
         var suggestionSource = suggestion ? (suggestion.source + ' (Confidence: ' + (suggestion.confidence || 'N/A') + ')') : 'AI Generated';
         
@@ -188,17 +194,19 @@ ckan.module('scheming-ai-suggestions', function($) {
     _showAiSuggestionButtons: function(aiSuggestions) {
       console.log("AI Suggestions: Showing buttons for available suggestions");
       
-      // Show buttons for fields that have AI suggestions
-      Object.keys(aiSuggestions).forEach(function(fieldName) {
-        var $button = $('.ai-suggestion-btn[data-field-name="' + fieldName + '"]');
+      // Show buttons for fields that have AI suggestions. Match on
+      // ``data-ai-key`` (not the field name) so a remapped field like
+      // ``tag_string`` (ai-key ``tags``) still lights up.
+      Object.keys(aiSuggestions).forEach(function(aiKey) {
+        var $button = $('.ai-suggestion-btn[data-ai-key="' + aiKey + '"]');
         if ($button.length > 0) {
           // Update button data attributes with new suggestion data
-          var suggestion = aiSuggestions[fieldName];
+          var suggestion = aiSuggestions[aiKey];
           if (suggestion && suggestion.value) {
             $button.attr('data-suggestion-value', suggestion.value);
             $button.attr('data-suggestion-source', suggestion.source + ' (Confidence: ' + (suggestion.confidence || 'N/A') + ')');
             $button.show();
-            console.log("AI Suggestions: Updated and showing button for field " + fieldName);
+            console.log("AI Suggestions: Updated and showing button for ai-key " + aiKey);
           }
         }
       });
@@ -219,15 +227,16 @@ $(function() {
     
     var $button = $(this);
     var fieldName = $button.data('field-name');
+    var aiKey = $button.data('ai-key') || fieldName;
     var globalState = window._schemingAiSuggestionsGlobalState;
-    
+
     console.log("AI suggestion button clicked for field:", fieldName);
-    
+
     // Hide all other popovers first
     $('.ai-suggestion-popover').hide();
-    
-    // Get suggestion from global state
-    var suggestion = globalState.aiSuggestions[fieldName];
+
+    // Get suggestion from global state (keyed by ai-key, not field name)
+    var suggestion = globalState.aiSuggestions[aiKey];
     var suggestionValue = suggestion ? suggestion.value : '';
     var suggestionSource = suggestion ? (suggestion.source + ' (Confidence: ' + (suggestion.confidence || 'N/A') + ')') : 'AI Generated';
     
@@ -331,7 +340,26 @@ function createPopover(fieldName, suggestionValue, suggestionSource, $button) {
     console.log("Value length:", value.length);
     
     // Apply the suggestion
-    if (isTextarea || $target.is('textarea')) {
+    var moduleAttr = ($target.attr('data-module') || '');
+    var isAutocomplete = moduleAttr.indexOf('autocomplete') !== -1;
+    if (isAutocomplete) {
+      // Tag / autocomplete fields (e.g. tag_string) render as a select2
+      // widget, so setting .val() alone does not update the visible
+      // chips. Split the comma-joined suggestion and push it through
+      // select2's API.
+      // ponytail: assumes select2 v3 (CKAN 2.11's bundled version), where
+      // `.select2('val', array)` sets tag chips. If CKAN upgrades select2,
+      // the catch-fallback (.val(str).trigger('change')) covers v4.
+      var tags = String(value).split(',').map(function(s) {
+        return s.trim();
+      }).filter(Boolean);
+      try {
+        $target.select2('val', tags);
+      } catch (e) {
+        $target.val(tags.join(',')).trigger('change');
+      }
+      $target.trigger('change');
+    } else if (isTextarea || $target.is('textarea')) {
       $target.val(value);
       // Trigger change event
       $target.trigger('change');
