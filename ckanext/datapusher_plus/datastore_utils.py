@@ -27,9 +27,13 @@ class DatastoreEncoder(json.JSONEncoder):
 
 def delete_datastore_resource(resource_id: str) -> None:
     """Delete a resource from datastore."""
+    # See send_resource_to_datastore: these writes create activities, whose schema
+    # rejects an empty user_id, so the context needs a real user.
+    site_user = tk.get_action("get_site_user")({"ignore_auth": True}, {})
     try:
         tk.get_action("datastore_delete")(
-            {"ignore_auth": True}, {"resource_id": resource_id, "force": True}
+            {"ignore_auth": True, "user": site_user["name"]},
+            {"resource_id": resource_id, "force": True},
         )
     except tk.ObjectNotFound:
         raise utils.JobError("Deleting existing datastore failed.")
@@ -37,9 +41,11 @@ def delete_datastore_resource(resource_id: str) -> None:
 
 def delete_resource(resource_id: str) -> None:
     """Delete a resource from CKAN."""
+    site_user = tk.get_action("get_site_user")({"ignore_auth": True}, {})
     try:
         tk.get_action("resource_delete")(
-            {"ignore_auth": True}, {"id": resource_id, "force": True}
+            {"ignore_auth": True, "user": site_user["name"]},
+            {"id": resource_id, "force": True},
         )
     except tk.ObjectNotFound:
         raise utils.JobError("Deleting existing resource failed.")
@@ -158,9 +164,14 @@ def send_resource_to_datastore(
             "aliases": aliases,
             "calculate_record_count": calculate_record_count,
         }
+    # ignore_auth skips the auth check but leaves context["user"] empty. datastore_create
+    # flips the datastore_active flag, which updates the resource and creates an activity,
+    # and the activity schema validates user_id -> ValidationError {'user_id': ['User not
+    # found']}. Supply the site user, as the rest of this module already does.
+    site_user = tk.get_action("get_site_user")({"ignore_auth": True}, {})
     try:
         resource_dict = tk.get_action("datastore_create")(
-            {"ignore_auth": True}, request
+            {"ignore_auth": True, "user": site_user["name"]}, request
         )
         return resource_dict
     except Exception as e:

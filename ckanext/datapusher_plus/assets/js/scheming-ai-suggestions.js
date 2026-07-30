@@ -343,22 +343,19 @@ function createPopover(fieldName, suggestionValue, suggestionSource, $button) {
     var moduleAttr = ($target.attr('data-module') || '');
     var isAutocomplete = moduleAttr.indexOf('autocomplete') !== -1;
     if (isAutocomplete) {
-      // Tag / autocomplete fields (e.g. tag_string) render as a select2
-      // widget, so setting .val() alone does not update the visible
-      // chips. Split the comma-joined suggestion and push it through
-      // select2's API.
-      // ponytail: assumes select2 v3 (CKAN 2.11's bundled version), where
-      // `.select2('val', array)` sets tag chips. If CKAN upgrades select2,
-      // the catch-fallback (.val(str).trigger('change')) covers v4.
+      // Tag / autocomplete fields (e.g. tag_string) take a single
+      // comma-separated string. Write "tag1, tag2, tag3" in one go and let
+      // the widget re-read it, rather than pushing tags in through
+      // select2's API: `.select2('val', array)` is select2 v3 only, and on
+      // the version CKAN 2.12 bundles it throws, leaving the fallback to
+      // apply just the first tag.
       var tags = String(value).split(',').map(function(s) {
         return s.trim();
       }).filter(Boolean);
-      try {
-        $target.select2('val', tags);
-      } catch (e) {
-        $target.val(tags.join(',')).trigger('change');
-      }
-      $target.trigger('change');
+      $target.val(tags.join(', '));
+      // change.select2 refreshes the chips when a select2 widget is bound;
+      // harmless no-op on a plain input.
+      $target.trigger('change').trigger('change.select2').trigger('input');
     } else if (isTextarea || $target.is('textarea')) {
       $target.val(value);
       // Trigger change event

@@ -551,3 +551,27 @@ groups:
           "re-run from failed task"). Format: ``<type-slug>/<name>``.
           Defaults to a local filesystem block; switch to an S3/GCS
           block for multi-host worker pools.
+
+      # flask: true is required from CKAN 2.12 on. CKAN no longer copies its
+      # config into the Flask app, and Jinja's `config` object is Flask's, so
+      # templates doing config.get('ckanext.datapusher_plus.enable_druf') get
+      # the default instead of the real value unless the option is declared
+      # here and marked for export.
+      - key: ckanext.datapusher_plus.enable_druf
+        type: bool
+        flask: true
+        editable: true
+        default: false
+        description: |
+          Enable the DRUF (Dataset Resource Upload First) workflow: create a
+          stub dataset, collect the resource first, then fill in metadata
+          assisted by DataPusher+ suggestions.
+
+      - key: ckanext.datapusher_plus.enable_form_redirect
+        type: bool
+        flask: true
+        editable: true
+        default: false
+        description: |
+          Redirect through the dataset metadata form after a resource is
+          uploaded, rather than straight to the dataset page.

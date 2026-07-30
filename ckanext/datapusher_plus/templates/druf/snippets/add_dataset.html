@@ -1,12 +1,24 @@
 {# Adds 'Add Dataset' button #}
 
-{% macro add_button(dataset_type) %}
+{# CKAN 2.12 no longer passes `group` here: organization/read.html delegates to
+   package/snippets/search_results.html, which calls this snippet with dataset_type
+   only. Fall back to c.group_dict so the button still renders, and still carries
+   owner_org, on organization pages. #}
+{% set owner_org = group %}
+{% if not owner_org and c.group_dict and c.group_dict.get('is_organization') %}
+  {% set owner_org = c.group_dict.get('id') %}
+{% endif %}
+
+{% macro add_button(dataset_type, owner_org) %}
   {% set link_label = h.humanize_entity_type('package', dataset_type, 'add link') or _("Add Dataset") %}
 
-  {% if h.check_config_permission('ckan.auth.create_unowned_dataset') or group %}
+  {% if h.check_config_permission('ckan.auth.create_unowned_dataset') or owner_org %}
     <form action="{% url_for 'resource_first.new' %}" method=post>
-      {% if group %}
-        <input type="hidden" name="owner_org" value="{{ group }}">
+      {# CKAN 2.12 removed ckan.csrf_protection.ignore_extensions, so this POST
+         is rejected without a token. #}
+      {{ h.csrf_input() }}
+      {% if owner_org %}
+        <input type="hidden" name="owner_org" value="{{ owner_org }}">
       {% endif %}
       <input type="hidden" name="type" value="{{ dataset_type }}">
       <input class="btn btn-primary" type="submit" value="{{ link_label }}">
@@ -16,9 +28,9 @@
 
 {% if 'scheming_dataset_schemas' in h %}
   {% for dataset_type in h.scheming_dataset_schemas(expanded=false) %}
-    {{ add_button(dataset_type) }}
+    {{ add_button(dataset_type, owner_org) }}
   {% endfor %}
 {% else %}
   {% set dataset_type = dataset_type if dataset_type else h.default_package_type() %}
-  {{ add_button(dataset_type) }}
+  {{ add_button(dataset_type, owner_org) }}
 {% endif %}
