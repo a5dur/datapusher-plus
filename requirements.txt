@@ -37,3 +37,5 @@ babel>=2.9
 # (QSV_ERROR_FORMAT=json). 0.4.0+ requires qsv 25.0.0+ (DP+'s own
 # MINIMUM_QSV_VERSION) and refuses older binaries. No dependencies.
 qsv-client>=0.4.0
+# pinecone: vector store embedding (ckanext.datapusher_plus.enable_vector_store).
+pinecone

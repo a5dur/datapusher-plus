@@ -1,7 +1,7 @@
 scheming_version: 2
 dataset_type: dataset
-about: A re-implementation of the default CKAN dataset schema
-about_url: http://github.com/ckan/ckanext-scheming
+about: A re-implementation of the DCAT US schema
+about_url: http://github.com/ckan/ckanext-dcat
 
 draft_fields_required: false
 
@@ -13,6 +13,7 @@ display_group_order:
 
 dataset_fields:
 
+
   - start_form_page:
       title: Basic Info
       description: Required and core dataset fields
@@ -20,109 +21,127 @@ dataset_fields:
     field_name: title
     label: Title
     preset: title
-    required: True
-    form_placeholder: eg. A descriptive title
-
+    required: true
+    help_text: A descriptive title for the dataset.
+  
   - field_name: name
     label: URL
     preset: dataset_slug
     form_placeholder: eg. my-dataset
-
+  
   - field_name: notes
-    label: Abstract
-    validators: scheming_required
-    required: false
+    label: Description
+    required: true
     form_snippet: markdown.html
-    form_placeholder: eg. Some useful notes about the data
+    help_text: A free-text account of the dataset.
+  
+  - field_name: tag_string
+    label: Keywords
+    preset: tag_string_autocomplete
+    form_placeholder: eg. economy, mental health, government
+    help_text: Keywords or tags describing the dataset. Use commas to separate multiple values.
+  
+  - field_name: contact_name
+    label: Contact Name
+    form_placeholder: Enter the contact name
+    validators: ignore_missing
+    help_text: Point of contact name for data steward.
+
+  - field_name: contact_email
+    label: Contact Email
+    form_placeholder: Enter the contact email
+    validators: ignore_missing
+    help_text: Point of contact email for data steward.
+
+  
+  - field_name: license_id
+    label: License
+    form_snippet: license.html
+    help_text: License definitions and additional information can be found at http://opendefinition.org/.
+  
+  - field_name: owner_org
+    label: Organization
+    preset: dataset_organization
+    help_text: The CKAN organization the dataset belongs to.
+  
+  - field_name: source_url
+    label: Source Link
+    form_placeholder: Enter the source URL
+    validators: ignore_missing
+    help_text: Associated website where the data, or information about the data, can be found.
+
+  - start_form_page:
+      title: Detailed Info
+      description:
+        These fields improve search and give users important links
+    # Note: this will fall back to metadata_created if not present
+    field_name: publication_date
+    label: Publication Date
+    preset: date
+    form_placeholder: Enter the publication date
+    help_text: Date of formal issuance.
+  
+  - field_name: start_date
+    label: Data Collection Dates:From
+    preset: date
+    display_snippet: null
+    form_placeholder: Enter the start date
+    validators: ignore_missing
+    help_text: Describe the date range within which the data was collected, or if data collection is still ongoing.
+
+  - field_name: end_date
+    label: Data Collection Dates:To
+    preset: date
+    display_snippet: null
+    form_placeholder: Enter the end date
+    validators: ignore_missing
+    help_text: Describe the date range within which the data was collected, or if data collection is still ongoing. 
     
   - field_name: spatial_extent
     label: Spatial Extent
     validators: scheming_required
     form_snippet: markdown.html
     suggestion_formula: '{{ spatial_extent_wkt() }}'
-
-  - field_name: owner_org
-    label: Organization
-    required: True
-    preset: dataset_organization
-
-  - start_form_page:
-      title: Detailed Info
-      description:
-        These fields improve search and give users important links
-
-    field_name: update_type
-    label: Update Type
-    help_text: Select Update Type
-    help_inline: true
-    form_include_blank_choice: true
-    preset: select
-    choices:
-      - label: Automatic
-        value: automatic
-      - label: Manual
-        value: manual
-      - label: None
-        value: none
-
-  - field_name: end_date
-    label: Automatic Update End Date
-    form_snippet: date.html
-    validators: ignore_missing 
-    help_text: If this dataset has an Update Type of Automatic and Automatic Updates should stop at some point, please indicate the end date at which Automatic Updates should stop. If not, leave this field blank.
-    help_inline: true
-
-  - field_name: next_update
-    label: Next Update
-    form_snippet: date.html
-
-
+    
+  
   - field_name: dpp_suggestions
     label: DPP Suggestions
     preset: json_object
-
+  # TODO: relation-based properties are not yet included (e.g. is_version_of, source, sample, etc)
+  #
 resource_fields:
-  - field_name: url
-    label: URL
-    preset: resource_url_upload
 
-  - field_name: name
-    label: Name
-    form_placeholder: eg. January 2011
+- field_name: url
+  label: URL
+  preset: resource_url_upload
 
-  - field_name: format
-    label: Format
-    preset: resource_format_autocomplete
+- field_name: name
+  label: Name
+  form_placeholder:
+  help_text: A descriptive title for the resource.
 
-  - field_name: description
-    label: Description
-    form_snippet: markdown.html
-    form_placeholder: Some useful notes about the data
+- field_name: format
+  label: Format
+  preset: resource_format_autocomplete
+  help_text: File format. If not provided it will be guessed.
 
-  - field_name: rights
-    label: Rights
-    form_snippet: markdown.html
-    validators: ignore_missing
+- field_name: rights
+  label: Rights
+  form_snippet: markdown.html
+  display_snippet: markdown.html
+  help_text: Some statement about the rights associated with the resource.
 
-  - field_name: license
-    label: License
-    validators: ignore_missing
+- field_name: license
+  label: License
+  help_text: License in which the resource is made available. If not provided will be inherited from the dataset.
 
-  - field_name: data_dictionary
-    label: Data dictionary
-    validators: ignore_missing
+- field_name: data_dictionary
+  label: Data dictionary
 
-  # Issue #112: per-resource locale override for number parsing.
-  # ``AnalysisStage._normalize_locale_numbers`` reads this field at
-  # ingestion time. BCP 47 / POSIX-style identifier (``de_DE``,
-  # ``fr_FR``, ``en_US``, ...). When set, babel parses comma-decimal
-  # and locale-specific thousands-separated numbers before qsv stats
-  # runs, so ``57,957`` (de_DE) and ``1.234,56`` (de_DE) and
-  # ``57 957,12`` (fr_FR) all infer as Float instead of Text.
-  # ``ckanext.datapusher_plus.default_locale`` provides the global
-  # fallback when this field is empty.
-  - field_name: dpp_locale
-    label: Locale
-    form_placeholder: e.g. de_DE, fr_FR, en_US
-    validators: ignore_missing
-
+# From main (#112): per-resource locale override for number parsing, read by
+# AnalysisStage._normalize_locale_numbers. Falls back to
+# ckanext.datapusher_plus.default_locale when empty.
+- field_name: dpp_locale
+  label: Locale
+  form_placeholder: e.g. de_DE, fr_FR, en_US
+  validators: ignore_missing

@@ -579,3 +579,97 @@ groups:
           "re-run from failed task"). Format: ``<type-slug>/<name>``.
           Defaults to a local filesystem block; switch to an S3/GCS
           block for multi-host worker pools.
+
+  - annotation: datapusher_plus vector store (Pinecone + OpenRouter)
+    options:
+      - key: ckanext.datapusher_plus.enable_vector_store
+        type: bool
+        default: false
+        editable: true
+      - key: ckanext.datapusher_plus.pinecone_api_key
+        editable: false
+      - key: ckanext.datapusher_plus.vector_store_index_name
+        default: ckan-test-index
+        editable: true
+      - key: ckanext.datapusher_plus.vector_store_namespace
+        default: ckan-namespace
+        editable: true
+      - key: ckanext.datapusher_plus.vector_text_field
+        default: text
+        editable: true
+      - key: ckanext.datapusher_plus.openrouter_api_key
+        editable: false
+      - key: ckanext.datapusher_plus.openrouter_model
+        default: google/gemini-2.0-flash-001
+        editable: true
+      - key: ckanext.datapusher_plus.vector_content_target_length
+        type: int
+        default: 8000
+        editable: true
+      - key: ckanext.datapusher_plus.vector_max_context_length
+        type: int
+        default: 6000
+        editable: true
+      - key: ckanext.datapusher_plus.vector_llm_sample_rows
+        type: int
+        default: 5
+        editable: true
+      - key: ckanext.datapusher_plus.vector_ai_max_tokens
+        type: int
+        default: 800
+        editable: true
+      - key: ckanext.datapusher_plus.vector_ai_temperature
+        default: '0.1'
+        editable: true
+      - key: ckanext.datapusher_plus.vector_max_ai_tags
+        type: int
+        default: 12
+        editable: true
+      - key: ckanext.datapusher_plus.vector_min_description_length
+        type: int
+        default: 50
+        editable: true
+      - key: ckanext.datapusher_plus.vector_include_ai_description
+        type: bool
+        default: true
+        editable: true
+      - key: ckanext.datapusher_plus.vector_include_ai_tags
+        type: bool
+        default: true
+        editable: true
+      - key: ckanext.datapusher_plus.vector_include_column_analysis
+        type: bool
+        default: true
+        editable: true
+      - key: ckanext.datapusher_plus.vector_include_frequency_insights
+        type: bool
+        default: true
+        editable: true
+      - key: ckanext.datapusher_plus.vector_include_sample_data
+        type: bool
+        default: true
+        editable: true
+      - key: ckanext.datapusher_plus.vector_timeout
+        type: int
+        default: 120
+        editable: true
+      - key: ckanext.datapusher_plus.vector_retry_attempts
+        type: int
+        default: 3
+        editable: true
+      - key: ckanext.datapusher_plus.vector_fallback_on_ai_failure
+        type: bool
+        default: true
+        editable: true
+      - key: ckanext.datapusher_plus.detect_temporal_coverage
+        type: bool
+        default: true
+        editable: true
+      - key: ckanext.datapusher_plus.vector_chunk_size
+        type: int
+        default: 1000
+        editable: true
+      - key: ckanext.datapusher_plus.chunk_overlap
+        type: int
+        default: 400
+        editable: true

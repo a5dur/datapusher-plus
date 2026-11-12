@@ -93,6 +93,7 @@ from ckanext.datapusher_plus.jobs.stages.formula import FormulaStage
 from ckanext.datapusher_plus.jobs.stages.indexing import IndexingStage
 from ckanext.datapusher_plus.jobs.stages.metadata import MetadataStage
 from ckanext.datapusher_plus.jobs.stages.validation import ValidationStage
+from ckanext.datapusher_plus.jobs.stages.vector_store import VectorStoreStage
 
 log = logging.getLogger(__name__)
 
@@ -399,6 +400,11 @@ def run_job(job_input: Union[JobInput, Dict[str, Any]]) -> Optional[str]:
                 dph.mark_job_as_completed(job_id, {"headers": runtime.headers_dicts})
                 _log_done(runtime, "(dry-run) ")
                 return None
+
+            # Optional Pinecone embedding (``enable_vector_store``), after the
+            # load has committed. Never raises, so it can't trigger rollback.
+            # ponytail: RQ runner only; add a task to prefect_flow if Prefect is re-enabled.
+            run_stage(VectorStoreStage())
 
             if runtime.quarantined_rows > 0:
                 runtime.logger.warning(
